@@ -56,7 +56,18 @@ async def process_query(
 ):
     """Process a query using RAG"""
     try:
+        logger.info(f"Starting query processing for: {request.query[:50]}...")
+        
+        # Test OpenAI API key first
+        logger.info("Testing OpenAI API key...")
+        from app.core.config import settings
+        logger.info(f"OpenAI API key starts with: {settings.openai_api_key[:10]}...")
+        
+        logger.info("Initializing RAG service...")
         rag_service = RAGQueryService()
+        logger.info("RAG service initialized successfully")
+        
+        logger.info("Processing query...")
         result = await rag_service.process_query(
             query_text=request.query,
             db=db,
@@ -65,6 +76,7 @@ async def process_query(
             rerank_context=request.rerank_context
         )
         
+        logger.info("Query processing completed successfully")
         return QueryResponse(**result)
         
     except Exception as e:

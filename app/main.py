@@ -6,9 +6,11 @@ FastAPI application with RAG capabilities and Agent orchestration
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import uvicorn
 from loguru import logger
+import os
 
 from app.core.config import settings
 from app.core.database import init_db
@@ -48,6 +50,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files (web UI)
+web_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
+if os.path.exists(web_dir):
+    app.mount("/web", StaticFiles(directory=web_dir, html=True), name="web")
+
 # Include API routes
 app.include_router(documents.router, prefix="/api/v1/documents", tags=["documents"])
 app.include_router(queries.router, prefix="/api/v1/queries", tags=["queries"])
@@ -57,11 +64,23 @@ app.include_router(monitoring.router, prefix="/api/v1/monitoring", tags=["monito
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
+    """Root endpoint - redirect to web UI"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/web/")
+
+
+@app.get("/api")
+async def api_info():
+    """API information endpoint"""
     return {
         "message": "Document Intelligence Platform API",
         "version": settings.app_version,
-        "status": "running"
+        "status": "running",
+        "endpoints": {
+            "web_ui": "/web/",
+            "api_docs": "/docs",
+            "health": "/health"
+        }
     }
 
 

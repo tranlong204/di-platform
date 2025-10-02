@@ -22,8 +22,13 @@ class CacheService:
     async def get_query_result(self, query: str) -> Optional[Dict[str, Any]]:
         """Get cached query result"""
         try:
+            logger.info("Generating cache key...")
             cache_key = self._generate_query_cache_key(query)
+            logger.info(f"Cache key generated: {cache_key}")
+            
+            logger.info("Attempting Redis GET operation...")
             cached_data = self.redis_client.get(cache_key)
+            logger.info("Redis GET operation completed")
             
             if cached_data:
                 result = json.loads(cached_data)
@@ -31,6 +36,7 @@ class CacheService:
                 logger.info(f"Cache hit for query: {query[:50]}...")
                 return result
             
+            logger.info("No cached data found")
             return None
             
         except Exception as e:

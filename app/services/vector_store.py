@@ -18,7 +18,19 @@ from langchain_openai import OpenAIEmbeddings
 class VectorStoreService:
     """Service for managing FAISS vector store and embeddings"""
     
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(VectorStoreService, cls).__new__(cls)
+        return cls._instance
+    
     def __init__(self):
+        if self._initialized:
+            return
+        # Configure embeddings client; OpenAIEmbeddings uses sync HTTP under the hood,
+        # so we guard calls with try/except and log durations to detect hangs.
         self.embeddings = OpenAIEmbeddings(
             model=settings.embedding_model,
             openai_api_key=settings.openai_api_key
@@ -26,13 +38,26 @@ class VectorStoreService:
         self.index_path = Path(settings.faiss_index_path)
         self.index_path.mkdir(parents=True, exist_ok=True)
         
-        # Initialize FAISS index
+        # Initialize FAISS index lazily to avoid blocking startup
         self.dimension = 3072  # OpenAI text-embedding-3-large dimension
-        self.index = self._load_or_create_index()
-        self.id_to_metadata = self._load_metadata()
+        self.index = None  # Will be loaded on first use
+        self.id_to_metadata = None  # Will be loaded on first use
+        self._index_loaded = False
         
         # Tokenizer for counting tokens
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        
+        # Mark as initialized
+        self._initialized = True
+    
+    def _ensure_index_loaded(self):
+        """Ensure FAISS index and metadata are loaded (lazy loading)"""
+        if not self._index_loaded:
+            logger.info("Loading FAISS index on first use...")
+            self.index = self._load_or_create_index()
+            self.id_to_metadata = self._load_metadata()
+            self._index_loaded = True
+            logger.info("FAISS index loaded successfully")
     
     def _load_or_create_index(self) -> faiss.IndexFlatIP:
         """Load existing FAISS index or create new one"""
@@ -68,6 +93,9 @@ class VectorStoreService:
     async def add_documents(self, document_id: int, chunks: List[Dict[str, Any]]):
         """Add document chunks to vector store"""
         try:
+            # Ensure index is loaded
+            self._ensure_index_loaded()
+            
             # Generate embeddings for all chunks
             texts = [chunk['content'] for chunk in chunks]
             embeddings = await self._generate_embeddings(texts)
@@ -99,7 +127,12 @@ class VectorStoreService:
     async def _generate_embeddings(self, texts: List[str]) -> np.ndarray:
         """Generate embeddings for texts"""
         try:
+            logger.info(f"Generating embeddings for {len(texts)} chunks...")
+            start_time = None
+            import time as _time
+            start_time = _time.time()
             embeddings = self.embeddings.embed_documents(texts)
+            logger.info(f"Embeddings generated in {_time.time() - start_time:.2f}s")
             return np.array(embeddings)
         except Exception as e:
             logger.error(f"Error generating embeddings: {str(e)}")
@@ -113,6 +146,9 @@ class VectorStoreService:
     ) -> List[Dict[str, Any]]:
         """Perform similarity search"""
         try:
+            # Ensure index is loaded
+            self._ensure_index_loaded()
+            
             # Check if index is empty
             if self.index.ntotal == 0:
                 logger.info("FAISS index is empty, returning empty results")
@@ -162,7 +198,11 @@ class VectorStoreService:
     async def _generate_query_embedding(self, query: str) -> np.ndarray:
         """Generate embedding for query"""
         try:
+            logger.info("Generating query embedding...")
+            import time as _time
+            _t0 = _time.time()
             embedding = self.embeddings.embed_query(query)
+            logger.info(f"Query embedding generated in {_time.time() - _t0:.2f}s")
             return np.array(embedding)
         except Exception as e:
             logger.error(f"Error generating query embedding: {str(e)}")
@@ -171,6 +211,9 @@ class VectorStoreService:
     async def delete_document(self, document_id: int):
         """Delete all vectors for a document"""
         try:
+            # Ensure index is loaded
+            self._ensure_index_loaded()
+            
             # Find all vector IDs for this document
             vector_ids_to_remove = []
             for vector_id, metadata in self.id_to_metadata.items():
@@ -197,6 +240,9 @@ class VectorStoreService:
     async def _rebuild_index(self):
         """Rebuild FAISS index from remaining metadata"""
         try:
+            # Ensure index is loaded
+            self._ensure_index_loaded()
+            
             # Create new index
             new_index = faiss.IndexFlatIP(self.dimension)
             
@@ -237,6 +283,9 @@ class VectorStoreService:
     
     def get_stats(self) -> Dict[str, Any]:
         """Get vector store statistics"""
+        # Ensure index is loaded
+        self._ensure_index_loaded()
+        
         return {
             'total_vectors': self.index.ntotal,
             'dimension': self.dimension,

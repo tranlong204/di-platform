@@ -271,6 +271,110 @@
             font-weight: 600;
         }
         
+        .documents-section {
+            margin-top: 20px;
+        }
+        
+        .documents-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+        
+        .document-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            background: #f8f9fa;
+            transition: background-color 0.3s ease;
+        }
+        
+        .document-item:hover {
+            background: #e9ecef;
+        }
+        
+        .document-info {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .document-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .document-meta {
+            font-size: 0.8rem;
+            color: #666;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .document-status {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        
+        .document-status.processed {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .document-status.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .document-status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .document-actions {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .action-button {
+            background: none;
+            border: none;
+            padding: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background-color 0.3s ease;
+        }
+        
+        .action-button:hover {
+            background: rgba(0,0,0,0.1);
+        }
+        
+        .delete-button {
+            color: #dc3545;
+        }
+        
+        .delete-button:hover {
+            background: #f8d7da;
+        }
+        
+        .view-button {
+            color: #667eea;
+        }
+        
+        .view-button:hover {
+            background: #e7f1ff;
+        }
+        
         .stats-section {
             margin-top: 20px;
         }
@@ -298,6 +402,19 @@
         
         .stat-value {
             font-weight: 600;
+            color: #667eea;
+        }
+        
+        .empty-documents {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .loading-documents {
+            text-align: center;
+            padding: 20px;
             color: #667eea;
         }
         
@@ -403,6 +520,13 @@
                 <div id="upload-status"></div>
             </div>
             
+            <div class="documents-section">
+                <h3>📚 Your Documents</h3>
+                <div id="documents-list">
+                    <div class="loading-documents">Loading documents...</div>
+                </div>
+            </div>
+            
             <div class="stats-section">
                 <h3>📊 System Stats</h3>
                 <div class="stat-item">
@@ -455,13 +579,14 @@
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:8000/api/v1';
+        const API_BASE = '/api/v1';
         let isLoading = false;
         
         // Load system stats on page load
         document.addEventListener('DOMContentLoaded', function() {
             loadSystemStats();
             loadChatHistory();
+            loadDocuments();
         });
         
         // Auto-resize textarea
@@ -481,6 +606,134 @@
                 document.getElementById('avg-response-time').textContent = data.queries.average_processing_time.toFixed(2) + 's';
             } catch (error) {
                 console.error('Error loading stats:', error);
+            }
+        }
+        
+        async function loadDocuments() {
+            try {
+                const response = await fetch(`${API_BASE}/documents/`);
+                const data = await response.json();
+                
+                const documentsList = document.getElementById('documents-list');
+                
+                if (data.documents.length === 0) {
+                    documentsList.innerHTML = '<div class="empty-documents">No documents uploaded yet</div>';
+                    return;
+                }
+                
+                documentsList.innerHTML = '';
+                
+                data.documents.forEach(doc => {
+                    const docElement = createDocumentElement(doc);
+                    documentsList.appendChild(docElement);
+                });
+                
+            } catch (error) {
+                console.error('Error loading documents:', error);
+                document.getElementById('documents-list').innerHTML = '<div class="error-message">Error loading documents</div>';
+            }
+        }
+        
+        function createDocumentElement(doc) {
+            const docDiv = document.createElement('div');
+            docDiv.className = 'document-item';
+            docDiv.id = `doc-${doc.id}`;
+            
+            const statusClass = doc.processed ? 'processed' : 'pending';
+            const statusText = doc.processed ? 'Processed' : 'Pending';
+            const fileSize = formatFileSize(doc.file_size);
+            const uploadDate = new Date(doc.created_at).toLocaleDateString();
+            
+            docDiv.innerHTML = `
+                <div class="document-info">
+                    <div class="document-name" title="${doc.filename}">${doc.filename}</div>
+                    <div class="document-meta">
+                        <span>${doc.file_type.toUpperCase()}</span>
+                        <span>${fileSize}</span>
+                        <span>${uploadDate}</span>
+                        <span class="document-status ${statusClass}">${statusText}</span>
+                    </div>
+                </div>
+                <div class="document-actions">
+                    <button class="action-button view-button" onclick="viewDocument(${doc.id})" title="View details">
+                        👁️
+                    </button>
+                    <button class="action-button delete-button" onclick="deleteDocument(${doc.id})" title="Delete document">
+                        🗑️
+                    </button>
+                </div>
+            `;
+            
+            return docDiv;
+        }
+        
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        async function deleteDocument(documentId) {
+            if (!confirm('Are you sure you want to delete this document? This action cannot be undone.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/documents/${documentId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    // Remove document from UI
+                    const docElement = document.getElementById(`doc-${documentId}`);
+                    if (docElement) {
+                        docElement.remove();
+                    }
+                    
+                    // Check if no documents left
+                    const documentsList = document.getElementById('documents-list');
+                    if (documentsList.children.length === 0) {
+                        documentsList.innerHTML = '<div class="empty-documents">No documents uploaded yet</div>';
+                    }
+                    
+                    // Refresh stats
+                    loadSystemStats();
+                    
+                    // Show success message
+                    addMessage('Document deleted successfully', 'assistant');
+                    
+                } else {
+                    const error = await response.json();
+                    addMessage(`Error deleting document: ${error.detail}`, 'assistant');
+                }
+                
+            } catch (error) {
+                addMessage(`Error deleting document: ${error.message}`, 'assistant');
+            }
+        }
+        
+        async function viewDocument(documentId) {
+            try {
+                const response = await fetch(`${API_BASE}/documents/${documentId}`);
+                const doc = await response.json();
+                
+                if (response.ok) {
+                    const message = `Document Details:\n\n` +
+                        `📄 Name: ${doc.filename}\n` +
+                        `📁 Type: ${doc.file_type.toUpperCase()}\n` +
+                        `📊 Size: ${formatFileSize(doc.file_size)}\n` +
+                        `✅ Status: ${doc.processed ? 'Processed' : 'Pending'}\n` +
+                        `📅 Uploaded: ${new Date(doc.created_at).toLocaleString()}`;
+                    
+                    addMessage(message, 'assistant');
+                } else {
+                    addMessage('Error loading document details', 'assistant');
+                }
+                
+            } catch (error) {
+                addMessage(`Error loading document: ${error.message}`, 'assistant');
             }
         }
         
@@ -695,8 +948,9 @@
                     }
                 }
                 
-                // Refresh stats
+                // Refresh stats and documents list
                 loadSystemStats();
+                loadDocuments();
                 
             } catch (error) {
                 showStatus(statusDiv, `❌ Upload failed: ${error.message}`, 'error');

@@ -23,12 +23,25 @@ from app.models import Query, Document
 class RAGQueryService:
     """Service for processing queries using RAG with LangChain"""
     
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(RAGQueryService, cls).__new__(cls)
+        return cls._instance
+    
     def __init__(self):
+        if self._initialized:
+            return
+        # Configure LLM with explicit timeout and limited retries to avoid hanging
         self.llm = ChatOpenAI(
             model=settings.openai_model,
             openai_api_key=settings.openai_api_key,
             temperature=0.1,
-            max_tokens=settings.max_tokens
+            max_tokens=settings.max_tokens,
+            timeout=30,
+            max_retries=1
         )
         self.vector_store = VectorStoreService()
         self.cache_service = CacheService()
@@ -37,6 +50,9 @@ class RAGQueryService:
         # Setup prompts
         self.system_prompt = self._create_system_prompt()
         self.qa_prompt = self._create_qa_prompt()
+        
+        # Mark as initialized
+        self._initialized = True
     
     def _create_system_prompt(self) -> str:
         """Create system prompt for the RAG system"""
@@ -82,18 +98,32 @@ class RAGQueryService:
         start_time = time.time()
         
         try:
-            # Check cache first
-            if use_cache:
-                cached_result = await self.cache_service.get_query_result(query_text)
-                if cached_result:
-                    logger.info(f"Returning cached result for query: {query_text[:50]}...")
-                    return cached_result
+            # Check cache first (disabled due to Redis connection issues)
+            if False and use_cache:  # Temporarily disable caching
+                logger.info("Checking cache for query...")
+                try:
+                    cached_result = await self.cache_service.get_query_result(query_text)
+                    if cached_result:
+                        logger.info(f"Returning cached result for query: {query_text[:50]}...")
+                        return cached_result
+                    logger.info("No cached result found, proceeding with fresh query")
+                except Exception as e:
+                    logger.error(f"Cache check failed, proceeding without cache: {str(e)}")
+                    # Continue without cache if Redis is unavailable
             
             # Generate query hash for tracking
+            logger.info("Generating query hash...")
             query_hash = self._generate_query_hash(query_text)
+            logger.info("Query hash generated")
             
             # Perform similarity search
-            search_results = await self.vector_store.similarity_search(query_text, k=k*2)
+            logger.info("Starting similarity search...")
+            try:
+                search_results = await self.vector_store.similarity_search(query_text, k=k*2)
+                logger.info(f"Similarity search returned {len(search_results)} results")
+            except Exception as e:
+                logger.error(f"Error in similarity search: {str(e)}")
+                raise
             
             if not search_results:
                 # Still create a query record even with no results
@@ -139,7 +169,13 @@ class RAGQueryService:
             similarity_scores = [r['similarity_score'] for r in top_results]
             
             # Generate response using LLM
-            response = await self._generate_response(query_text, context)
+            logger.info("Generating response with LLM...")
+            try:
+                response = await self._generate_response(query_text, context)
+                logger.info("LLM response generated")
+            except Exception as e:
+                logger.error(f"Error generating LLM response: {str(e)}")
+                raise
             
             processing_time = time.time() - start_time
             
