@@ -2,17 +2,22 @@
   "version": 2,
   "builds": [
     {
-      "src": "main_render_postgres.py",
+      "src": "main_supabase.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "main_render_postgres.py"
+      "dest": "main_supabase.py"
     }
   ],
   "env": {
     "PYTHONPATH": "/var/task"
+  },
+  "functions": {
+    "main_supabase.py": {
+      "maxDuration": 30
+    }
   }
 }
