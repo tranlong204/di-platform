@@ -1,0 +1,80 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Document Intelligence Platform",
+    "tags": ["di-platform"],
+    "style": "dark",
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Document Processing Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(di_documents_processed_total[5m])",
+            "legendFormat": "Documents/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Query Response Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(di_query_response_time_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(di_query_response_time_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Cache Hit Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(di_cache_hits_total[5m]) / (rate(di_cache_hits_total[5m]) + rate(di_cache_misses_total[5m])) * 100",
+            "legendFormat": "Hit Rate %"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Active Documents",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "di_active_documents",
+            "legendFormat": "Documents"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "Vector Store Size",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "di_vector_store_size",
+            "legendFormat": "Vectors"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s"
+  }
+}
