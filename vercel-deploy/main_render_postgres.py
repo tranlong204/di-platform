@@ -161,8 +161,8 @@ def init_database():
 try:
     from openai import OpenAI
     client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
-        print(f"Debug: OpenAI client created: {"Yes" if client else "No"}")
-        print(f"Debug: API key length: {len(settings.openai_api_key) if settings.openai_api_key else 0}")
+    print(f"Debug: OpenAI client created: {"Yes" if client else "No"}")
+    print(f"Debug: API key length: {len(settings.openai_api_key) if settings.openai_api_key else 0}")
     if client:
         print("✅ OpenAI client initialized successfully")
     else:
