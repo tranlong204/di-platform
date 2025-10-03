@@ -725,6 +725,7 @@ async def upload_document(file: UploadFile = File(...)):
         print(f"Uploading document: {file.filename}")
         
         # Read file content
+        file_content = await file.read()
         
         # Check file size (Vercel limit is 4.5MB)
         MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB limit
