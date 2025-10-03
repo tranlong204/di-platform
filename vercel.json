@@ -2,14 +2,14 @@
   "version": 2,
   "builds": [
     {
-      "src": "vercel-deploy/main_render_postgres.py",
+      "src": "main_render_postgres.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "vercel-deploy/main_render_postgres.py"
+      "dest": "main_render_postgres.py"
     }
   ],
   "env": {
