@@ -80,6 +80,7 @@ class Settings:
     def __init__(self):
         self.database_url = os.getenv("DATABASE_URL", "").strip()
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        print(f"Debug: OpenAI API key loaded: {"Yes" if self.openai_api_key else "No"}")
         self.app_name = os.getenv("APP_NAME", "Document Intelligence Platform").strip()
         self.app_version = os.getenv("APP_VERSION", "1.0.0").strip()
         self.debug = os.getenv("DEBUG", "false").strip().lower() == "true"
@@ -160,6 +161,8 @@ def init_database():
 try:
     from openai import OpenAI
     client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
+        print(f"Debug: OpenAI client created: {"Yes" if client else "No"}")
+        print(f"Debug: API key length: {len(settings.openai_api_key) if settings.openai_api_key else 0}")
     if client:
         print("✅ OpenAI client initialized successfully")
     else:
