@@ -496,7 +496,7 @@ Please provide a comprehensive answer based on the context above. Format your re
 
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful AI assistant that answers questions based on document context."},
                 {"role": "user", "content": prompt}
