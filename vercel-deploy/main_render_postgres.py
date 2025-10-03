@@ -474,7 +474,7 @@ def generate_response(query: str, context_chunks: List[DocumentChunk]) -> str:
         # Fallback response when OpenAI is not available
         if context_chunks:
             top_chunk = context_chunks[0]
-            return f"Based on the document '{top_chunk.metadata['filename']}', here's what I found:\n\n{top_chunk.content[:500]}..."
+            return f"Based on the document '{top_chunk.metadata['filename']}', here's what I found:\n\n{top_chunk.content.replace('\n', ' ').replace('\r', ' ').strip()[:400]}..."
         else:
             return "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
     
@@ -507,11 +507,11 @@ Please provide a comprehensive answer based on the context above. Format your re
         print(f"Debug: AI response preview: {ai_response[:100]}...")
         
         # If AI response is too generic, provide fallback
-        if len(ai_response) < 50 or "I don't know" in ai_response.lower() or "I cannot" in ai_response.lower():
+        if len(ai_response) < 30 or "I don't know" in ai_response.lower() or "I cannot" in ai_response.lower():
             print("AI response seems inadequate, providing fallback")
             if context_chunks:
                 top_chunk = context_chunks[0]
-                return f"Based on the document '{top_chunk.metadata['filename']}', here's what I found:\n\n{top_chunk.content[:500]}..."
+                return f"Based on the document '{top_chunk.metadata['filename']}', here's what I found:\n\n{top_chunk.content.replace('\n', ' ').replace('\r', ' ').strip()[:400]}..."
         
         return ai_response
         
@@ -520,7 +520,7 @@ Please provide a comprehensive answer based on the context above. Format your re
         # Fallback to simple text extraction
         if context_chunks:
             top_chunk = context_chunks[0]
-            return f"Based on the document '{top_chunk.metadata['filename']}', here's what I found:\n\n{top_chunk.content[:500]}..."
+            return f"Based on the document '{top_chunk.metadata['filename']}', here's what I found:\n\n{top_chunk.content.replace('\n', ' ').replace('\r', ' ').strip()[:400]}..."
         else:
             return f"Error generating response: {str(e)}"
 
