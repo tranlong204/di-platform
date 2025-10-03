@@ -14,10 +14,5 @@
   ],
   "env": {
     "PYTHONPATH": "/var/task"
-  },
-  "functions": {
-    "main_render_postgres.py": {
-      "maxDuration": 30
-    }
   }
 }
