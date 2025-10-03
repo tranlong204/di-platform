@@ -210,6 +210,18 @@
             background: #218838;
         }
 
+        .file-types-info {
+            text-align: center;
+            margin-top: 8px;
+            color: #666;
+        }
+
+        .file-types-info small {
+            font-size: 11px;
+            color: #888;
+            font-style: italic;
+        }
+
         .file-input {
             display: none;
         }
@@ -364,9 +376,12 @@
     <div class="container">
         <div class="sidebar">
             <div class="upload-section">
-                <button class="upload-button" onclick="document.getElementById('fileInput').click()">
+                <button class="upload-button" onclick="document.getElementById('fileInput').click()" title="Click to upload PDF, DOCX, or TXT files (max 2MB each)">
                     📄 Upload Document
                 </button>
+                <div class="file-types-info">
+                    <small>Supported: PDF, DOCX, TXT (max 2MB)</small>
+                </div>
                 <input type="file" id="fileInput" class="file-input" multiple accept=".pdf,.docx,.txt" onchange="uploadFiles()">
             </div>
 
@@ -675,7 +690,13 @@
                 }
             } catch (error) {
                 console.error('Error uploading file:', error);
-                addMessage(`❌ Error uploading "${file.name}": ${error.message}`, 'ai');
+                
+                // Handle specific error types
+                if (error.message.includes('413') || error.message.includes('too large')) {
+                    addMessage(`❌ File "${file.name}" is too large. Maximum file size is 2MB. Please try a smaller file.`, 'ai');
+                } else {
+                    addMessage(`❌ Error uploading "${file.name}": ${error.message}`, 'ai');
+                }
             }
         }
     </script>
