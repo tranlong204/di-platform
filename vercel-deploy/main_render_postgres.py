@@ -503,6 +503,8 @@ Please provide a comprehensive answer based on the context above. Format your re
         )
         
         ai_response = response.choices[0].message.content
+        print(f"Debug: AI response length: {len(ai_response)}")
+        print(f"Debug: AI response preview: {ai_response[:100]}...")
         
         # If AI response is too generic, provide fallback
         if len(ai_response) < 50 or "I don't know" in ai_response.lower() or "I cannot" in ai_response.lower():
@@ -528,6 +530,7 @@ def process_query(query_text: str, k: int = 5) -> Dict[str, Any]:
     
     try:
         print(f"Processing query: {query_text[:50]}...")
+        print(f"Debug: Query length: {len(query_text)}")
         
         # Perform similarity search
         print("Starting similarity search...")
