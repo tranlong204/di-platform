@@ -551,10 +551,17 @@
 
         async function viewDocument(documentId) {
             try {
-                const response = await fetch(`${API_BASE}/documents/${documentId}`);
-                const doc = await response.json();
+                // Fetch all documents and find the one with matching ID
+                const response = await fetch(`${API_BASE}/documents/`);
+                const documents = await response.json();
+                const doc = documents.find(d => d.id === documentId);
                 
-                addMessage(`📄 Document: ${doc.filename}\nType: ${doc.file_type}\nSize: ${(doc.file_size / 1024).toFixed(2)} KB\nChunks: ${doc.chunks_count}`, 'ai');
+                if (doc) {
+                    const sizeKB = (doc.file_size / 1024).toFixed(2);
+                    addMessage(`📄 Document: ${doc.filename}\nType: ${doc.file_type}\nSize: ${sizeKB} KB\nChunks: ${doc.chunks_count}`, 'ai');
+                } else {
+                    addMessage(`❌ Document not found`, 'ai');
+                }
             } catch (error) {
                 console.error('Error viewing document:', error);
                 addMessage(`❌ Error viewing document: ${error.message}`, 'ai');
