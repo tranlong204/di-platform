@@ -489,7 +489,7 @@ Context from documents:
 
 Question: {query}
 
-Please provide a comprehensive answer based on the context above. If the context doesn't contain enough information to answer the question, please say so and provide what information you can."""
+Please provide a comprehensive answer based on the context above. Format your response clearly with bullet points or numbered lists when appropriate. Keep responses concise but informative. If the context doesn't contain enough information to answer the question, please say so and provide what information you can."""
 
     try:
         response = client.chat.completions.create(
@@ -498,8 +498,8 @@ Please provide a comprehensive answer based on the context above. If the context
                 {"role": "system", "content": "You are a helpful AI assistant that answers questions based on document context."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=1000,
-            temperature=0.7
+            max_tokens=1500,
+            temperature=0.3
         )
         
         ai_response = response.choices[0].message.content
