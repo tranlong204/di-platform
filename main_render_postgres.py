@@ -19,7 +19,6 @@ from psycopg2.extras import RealDictCursor
 import PyPDF2
 from docx import Document
 import io
-import numpy as np
 
 # Initialize FastAPI app
 app = FastAPI(
