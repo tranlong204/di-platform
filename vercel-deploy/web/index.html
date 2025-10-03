@@ -530,7 +530,13 @@
                 
             } catch (error) {
                 console.error('Error uploading file:', error);
-                addMessage(`❌ Error uploading "${file.name}": ${error.message}`, 'ai');
+                
+                // Handle specific error types
+                if (error.message.includes('413') || error.message.includes('too large')) {
+                    addMessage(`❌ File "${file.name}" is too large. Maximum file size is 2MB. Please try a smaller file.`, 'ai');
+                } else {
+                    addMessage(`❌ Error uploading "${file.name}": ${error.message}`, 'ai');
+                }
             }
         }
 
@@ -603,6 +609,7 @@
                     loadStats();
                     loadDocuments();
                 } else {
+                    addMessage(`❌ Error uploading "${file.name}": ${error.message}`, 'ai');
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
             } catch (error) {
