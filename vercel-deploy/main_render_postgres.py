@@ -727,9 +727,9 @@ async def upload_document(file: UploadFile = File(...)):
         # Read file content
         
         # Check file size (Vercel limit is 4.5MB)
-        MAX_FILE_SIZE = 4 * 1024 * 1024  # 4MB limit
+        MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB limit
         if len(file_content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail=f"File too large. Maximum size is 4MB.")
+            raise HTTPException(status_code=413, detail=f"File too large. Maximum size is 2MB.")
         
         # Process document
         doc_data = process_document(file_content, file.filename, file.content_type)
