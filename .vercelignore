@@ -137,3 +137,13 @@ cython_debug/
 *.rej
 *.tmp
 *.temp
+
+# App directory (not needed for Vercel deployment)
+app/
+
+# Additional exclusions
+__pycache__/
+vercel-deploy/
+node_modules/
+package.json
+yarn.lock
