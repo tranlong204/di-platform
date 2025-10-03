@@ -130,6 +130,7 @@
         }
 
         .user-message .message-time {
+            color: rgba(255, 255, 255, 0.8);
             text-align: left;
         }
 
@@ -445,12 +446,14 @@
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
+                .replace(/\n\n/g, '<br><br>')
+                .replace(/\n•/g, '<br>•')
+                .replace(/\n\d+\./g, '<br>$&')
                 .replace(/\n/g, '<br>')
                 .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
                 .replace(/\*(.*?)\*/g, '<em>$1</em>')
                 .replace(/`(.*?)`/g, '<code>$1</code>');
         }
-
         async function processQuery(query) {
             isLoading = true;
             const sendButton = document.getElementById('sendButton');
