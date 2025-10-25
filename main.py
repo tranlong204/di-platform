@@ -13,6 +13,22 @@ import json
 import PyPDF2
 from docx import Document
 from io import BytesIO
+from supabase import create_client, Client
+from pydantic_settings import BaseSettings
+
+# Supabase Configuration
+class Settings(BaseSettings):
+    supabase_url: str
+    supabase_key: str
+    supabase_service_key: str = ""
+    
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+
+# Initialize Supabase client
+supabase: Client = create_client(settings.supabase_url, settings.supabase_key)
 
 # Simple in-memory storage for demo (in production, use Supabase)
 documents_storage = []
@@ -103,12 +119,30 @@ async def get_stats():
 @app.get("/api/v1/documents/")
 async def get_documents():
     """Get all documents"""
+    try:
+        # Try to fetch from Supabase first
+        supabase_response = supabase.table("documents").select("*").execute()
+        if supabase_response.data:
+            return {"documents": supabase_response.data, "total": len(supabase_response.data)}
+    except Exception as e:
+        print(f"Supabase fetch failed: {e}")
+    
+    # Fallback to memory storage
     return {"documents": documents_storage, "total": len(documents_storage)}
 
 
 @app.get("/api/v1/queries/history")
 async def get_query_history():
     """Get query history"""
+    try:
+        # Try to fetch from Supabase first
+        supabase_response = supabase.table("queries").select("*").order("created_at", desc=True).execute()
+        if supabase_response.data:
+            return {"queries": supabase_response.data, "total": len(supabase_response.data)}
+    except Exception as e:
+        print(f"Supabase fetch failed: {e}")
+    
+    # Fallback to memory storage
     return {"queries": queries_storage, "total": len(queries_storage)}
 
 
@@ -182,14 +216,34 @@ async def process_query(query_data: dict):
         query_record["response"] = response
         query_record["processing_time"] = 0.5  # Simulated processing time
         
-        # Store the query
-        queries_storage.append(query_record)
-        
-        return {
-            "query_id": query_id,
-            "response": response,
-            "processing_time": query_record["processing_time"]
-        }
+        # Store the query in Supabase
+        try:
+            # Save to Supabase queries table
+            supabase_response = supabase.table("queries").insert({
+                "query": query_text,
+                "response": response,
+                "created_at": datetime.now().isoformat(),
+                "processing_time": query_record["processing_time"]
+            }).execute()
+            
+            # Also store in memory for immediate access
+            queries_storage.append(query_record)
+            
+            return {
+                "query_id": query_id,
+                "response": response,
+                "processing_time": query_record["processing_time"],
+                "supabase_id": supabase_response.data[0]["id"] if supabase_response.data else None
+            }
+        except Exception as db_error:
+            # Fallback to memory storage if Supabase fails
+            queries_storage.append(query_record)
+            return {
+                "query_id": query_id,
+                "response": response,
+                "processing_time": query_record["processing_time"],
+                "warning": f"Database save failed: {str(db_error)}"
+            }
         
     except Exception as e:
         return {"error": f"Query processing failed: {str(e)}"}
@@ -228,13 +282,36 @@ async def upload_document(file: UploadFile = File(...)):
             "full_content": extracted_text  # Store full content for querying
         }
         
-        # Store the document
-        documents_storage.append(document_record)
-        
-        return {
-            "message": f"Document '{file.filename}' uploaded successfully",
-            "document": document_record
-        }
+        # Store the document in Supabase
+        try:
+            # Save to Supabase documents table
+            supabase_response = supabase.table("documents").insert({
+                "filename": file.filename,
+                "file_path": f"/uploads/{file.filename}",  # Virtual path
+                "file_type": file_extension,
+                "file_size": len(content),
+                "uploaded_at": datetime.now().isoformat(),
+                "processed": True if extracted_text else False,
+                "content": extracted_text[:1000] if extracted_text else "",
+                "full_content": extracted_text
+            }).execute()
+            
+            # Also store in memory for immediate access
+            documents_storage.append(document_record)
+            
+            return {
+                "message": f"Document '{file.filename}' uploaded successfully",
+                "document": document_record,
+                "supabase_id": supabase_response.data[0]["id"] if supabase_response.data else None
+            }
+        except Exception as db_error:
+            # Fallback to memory storage if Supabase fails
+            documents_storage.append(document_record)
+            return {
+                "message": f"Document '{file.filename}' uploaded successfully (memory only)",
+                "document": document_record,
+                "warning": f"Database save failed: {str(db_error)}"
+            }
         
     except Exception as e:
         return {"error": f"Upload failed: {str(e)}"}
