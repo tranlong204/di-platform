@@ -168,16 +168,36 @@ async def process_query(query_data: dict):
         response = "I'm here to help answer questions about your uploaded documents."
         
         # Search through uploaded documents for relevant content
-        if documents_storage:
-            for doc in documents_storage:
-                if doc.get("full_content"):
-                    content = doc["full_content"].lower()
+        # First try to get documents from Supabase
+        documents_to_search = []
+        try:
+            supabase_response = supabase.table("documents").select("*").execute()
+            if supabase_response.data:
+                documents_to_search = supabase_response.data
+        except Exception as e:
+            print(f"Supabase fetch failed: {e}")
+        
+        # Fallback to memory storage if Supabase fails
+        if not documents_to_search:
+            documents_to_search = documents_storage
+        
+        if documents_to_search:
+            for doc in documents_to_search:
+                # Get content from either Supabase metadata or memory storage
+                full_content = ""
+                if doc.get("metadata_json") and doc["metadata_json"].get("full_content"):
+                    full_content = doc["metadata_json"]["full_content"]
+                elif doc.get("full_content"):
+                    full_content = doc["full_content"]
+                
+                if full_content:
+                    content = full_content.lower()
                     query_lower = query_text.lower()
                     
                     # Look for specific information in the document
                     if "who is" in query_lower and "long tran" in query_lower:
                         # Extract relevant information about Long Tran from the document
-                        lines = doc["full_content"].split('\n')
+                        lines = full_content.split('\n')
                         relevant_info = []
                         
                         for line in lines:
@@ -188,16 +208,16 @@ async def process_query(query_data: dict):
                         if relevant_info:
                             response = f"Based on the document '{doc['filename']}', here's what I found about Long Tran:\n\n" + "\n".join(relevant_info[:5])  # Show first 5 relevant lines
                         else:
-                            response = f"I found the document '{doc['filename']}' but couldn't extract specific information about Long Tran. The document contains: {doc['content'][:200]}..."
+                            response = f"I found the document '{doc['filename']}' but couldn't extract specific information about Long Tran. The document contains: {full_content[:200]}..."
                     
                     elif "what" in query_lower or "tell me" in query_lower:
                         # General information extraction
-                        response = f"Based on the document '{doc['filename']}', here's some information:\n\n{doc['content'][:500]}..."
+                        response = f"Based on the document '{doc['filename']}', here's some information:\n\n{full_content[:500]}..."
                         break
                     
                     elif any(keyword in query_lower for keyword in ['experience', 'education', 'skills', 'work', 'job']):
                         # Look for specific sections
-                        lines = doc["full_content"].split('\n')
+                        lines = full_content.split('\n')
                         relevant_lines = []
                         
                         for line in lines:
@@ -208,7 +228,7 @@ async def process_query(query_data: dict):
                         if relevant_lines:
                             response = f"Here's relevant information from '{doc['filename']}':\n\n" + "\n".join(relevant_lines[:10])
                         else:
-                            response = f"I found the document '{doc['filename']}' but couldn't find specific information about that topic. The document contains: {doc['content'][:300]}..."
+                            response = f"I found the document '{doc['filename']}' but couldn't find specific information about that topic. The document contains: {full_content[:300]}..."
                         break
         else:
             response = "I don't see any uploaded documents. Please upload a document first, then ask questions about its content."
