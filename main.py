@@ -2,7 +2,7 @@
 Document Intelligence Platform - Minimal Vercel Version
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -59,6 +59,33 @@ async def get_documents():
 async def get_query_history():
     """Get query history"""
     return {"queries": [], "total": 0}
+
+
+@app.post("/api/v1/documents/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Upload a document"""
+    try:
+        # Check file size (2MB limit)
+        content = await file.read()
+        if len(content) > 2 * 1024 * 1024:  # 2MB
+            return {"error": "File too large. Maximum size is 2MB."}
+        
+        # Check file type
+        allowed_types = [".pdf", ".docx", ".txt"]
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        if file_extension not in allowed_types:
+            return {"error": f"File type not supported. Allowed types: {', '.join(allowed_types)}"}
+        
+        # For now, just return success (in a real implementation, you'd save the file)
+        return {
+            "message": f"Document '{file.filename}' uploaded successfully",
+            "filename": file.filename,
+            "size": len(content),
+            "type": file_extension
+        }
+        
+    except Exception as e:
+        return {"error": f"Upload failed: {str(e)}"}
 
 
 @app.get("/api")
