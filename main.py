@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 import os
 import json
+import PyPDF2
+from docx import Document
+from io import BytesIO
 
 # Simple in-memory storage for demo (in production, use Supabase)
 documents_storage = []
@@ -20,6 +23,37 @@ def get_db():
     # In a real implementation, this would return a database session
     # For now, we'll use in-memory storage
     return None
+
+
+def extract_text_from_document(content: bytes, file_extension: str) -> str:
+    """Extract text from uploaded document"""
+    try:
+        if file_extension == ".pdf":
+            # Extract text from PDF
+            pdf_reader = PyPDF2.PdfReader(BytesIO(content))
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            return text.strip()
+        
+        elif file_extension == ".docx":
+            # Extract text from DOCX
+            doc = Document(BytesIO(content))
+            text = ""
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            return text.strip()
+        
+        elif file_extension == ".txt":
+            # Extract text from TXT
+            return content.decode('utf-8').strip()
+        
+        else:
+            return ""
+    
+    except Exception as e:
+        print(f"Error extracting text: {e}")
+        return ""
 
 
 # Create FastAPI application
@@ -53,11 +87,15 @@ async def root():
 @app.get("/api/v1/stats")
 async def get_stats():
     """Get system statistics"""
+    processed_docs = sum(1 for doc in documents_storage if doc.get("processed", False))
+    total_chunks = sum(doc.get("chunks", 0) for doc in documents_storage)
+    avg_processing_time = sum(q.get("processing_time", 0) for q in queries_storage) / len(queries_storage) if queries_storage else 0
+    
     return {
-        "documents": {"total": len(documents_storage), "processed": 0, "pending": len(documents_storage)},
-        "queries": {"total": len(queries_storage), "average_processing_time": 0},
+        "documents": {"total": len(documents_storage), "processed": processed_docs, "pending": len(documents_storage) - processed_docs},
+        "queries": {"total": len(queries_storage), "average_processing_time": avg_processing_time},
         "agents": {"total_executions": 0, "successful_executions": 0, "success_rate": 0.0},
-        "vector_store": {"total_vectors": 0, "dimension": 0, "index_type": "none", "documents_count": len(documents_storage)},
+        "vector_store": {"total_vectors": total_chunks, "dimension": 0, "index_type": "none", "documents_count": len(documents_storage)},
         "cache": {"total_keys": 0, "memory_usage": "0B", "hit_rate": 0.0, "connected_clients": 0}
     }
 
@@ -93,16 +131,53 @@ async def process_query(query_data: dict):
         }
         
         # Simple response logic (in production, you'd use AI/RAG)
-        if "who is" in query_text.lower():
-            # Look for document names in the query
-            if "long tran" in query_text.lower():
-                response = "Based on the uploaded document 'Long_Tran_Resume.pdf', Long Tran appears to be the document owner. However, I cannot access the document content to provide specific details about Long Tran's background, experience, or qualifications. To get detailed information, the document would need to be processed and indexed."
-            else:
-                response = "I can help answer questions about uploaded documents. Please make sure you have uploaded a document and ask specific questions about its content."
-        elif "what" in query_text.lower():
-            response = "I can help answer questions about your uploaded documents. Please ask specific questions about the content of your documents."
+        response = "I'm here to help answer questions about your uploaded documents."
+        
+        # Search through uploaded documents for relevant content
+        if documents_storage:
+            for doc in documents_storage:
+                if doc.get("full_content"):
+                    content = doc["full_content"].lower()
+                    query_lower = query_text.lower()
+                    
+                    # Look for specific information in the document
+                    if "who is" in query_lower and "long tran" in query_lower:
+                        # Extract relevant information about Long Tran from the document
+                        lines = doc["full_content"].split('\n')
+                        relevant_info = []
+                        
+                        for line in lines:
+                            line_lower = line.lower()
+                            if any(keyword in line_lower for keyword in ['long tran', 'experience', 'education', 'skills', 'summary', 'objective']):
+                                relevant_info.append(line.strip())
+                        
+                        if relevant_info:
+                            response = f"Based on the document '{doc['filename']}', here's what I found about Long Tran:\n\n" + "\n".join(relevant_info[:5])  # Show first 5 relevant lines
+                        else:
+                            response = f"I found the document '{doc['filename']}' but couldn't extract specific information about Long Tran. The document contains: {doc['content'][:200]}..."
+                    
+                    elif "what" in query_lower or "tell me" in query_lower:
+                        # General information extraction
+                        response = f"Based on the document '{doc['filename']}', here's some information:\n\n{doc['content'][:500]}..."
+                        break
+                    
+                    elif any(keyword in query_lower for keyword in ['experience', 'education', 'skills', 'work', 'job']):
+                        # Look for specific sections
+                        lines = doc["full_content"].split('\n')
+                        relevant_lines = []
+                        
+                        for line in lines:
+                            line_lower = line.lower()
+                            if any(keyword in line_lower for keyword in ['experience', 'education', 'skills', 'work', 'job', 'position', 'degree']):
+                                relevant_lines.append(line.strip())
+                        
+                        if relevant_lines:
+                            response = f"Here's relevant information from '{doc['filename']}':\n\n" + "\n".join(relevant_lines[:10])
+                        else:
+                            response = f"I found the document '{doc['filename']}' but couldn't find specific information about that topic. The document contains: {doc['content'][:300]}..."
+                        break
         else:
-            response = "I'm here to help answer questions about your uploaded documents. Please ask specific questions about the document content."
+            response = "I don't see any uploaded documents. Please upload a document first, then ask questions about its content."
         
         query_record["response"] = response
         query_record["processing_time"] = 0.5  # Simulated processing time
@@ -137,14 +212,20 @@ async def upload_document(file: UploadFile = File(...)):
         
         # Create document record
         document_id = len(documents_storage) + 1
+        
+        # Extract text from document
+        extracted_text = extract_text_from_document(content, file_extension)
+        
         document_record = {
             "id": document_id,
             "filename": file.filename,
             "size": len(content),
             "type": file_extension,
             "uploaded_at": datetime.now().isoformat(),
-            "processed": False,
-            "chunks": 0
+            "processed": True if extracted_text else False,
+            "chunks": 1 if extracted_text else 0,
+            "content": extracted_text[:1000] if extracted_text else "",  # Store first 1000 chars for demo
+            "full_content": extracted_text  # Store full content for querying
         }
         
         # Store the document
