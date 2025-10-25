@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Document Intelligence Platform</title>
+    <link rel="icon" type="image/svg+xml" href="/web/favicon.svg">
+    <!-- Version: 2025-10-25-fixed-js-errors -->
     <style>
         * {
             margin: 0;
@@ -473,13 +475,28 @@
 
         async function loadStats() {
             try {
-                const response = await fetch(`${API_BASE}/stats`);
+                console.log('Loading stats...');
+                const response = await fetch(`${API_BASE}/stats?t=${Date.now()}`);
                 if (response.ok) {
                     const stats = await response.json();
-                    document.getElementById('docCount').textContent = stats.total_documents;
-                    document.getElementById('chunkCount').textContent = stats.total_chunks;
-                    document.getElementById('queryCount').textContent = stats.total_queries;
-                    document.getElementById('avgResponseTime').textContent = stats.avg_processing_time.toFixed(2) + 's';
+                    console.log('Stats received:', stats);
+                    
+                    // Check if DOM elements exist before updating
+                    const docCountEl = document.getElementById('docCount');
+                    const chunkCountEl = document.getElementById('chunkCount');
+                    const queryCountEl = document.getElementById('queryCount');
+                    const avgResponseTimeEl = document.getElementById('avgResponseTime');
+                    
+                    if (docCountEl) docCountEl.textContent = stats.documents?.total || 0;
+                    if (chunkCountEl) chunkCountEl.textContent = stats.vector_store?.total_vectors || 0;
+                    if (queryCountEl) queryCountEl.textContent = stats.queries?.total || 0;
+                    
+                    // Safe handling of average_processing_time
+                    const avgTime = stats.queries?.average_processing_time;
+                    console.log('Average time:', avgTime, 'Type:', typeof avgTime);
+                    const avgTimeStr = (avgTime && typeof avgTime === 'number') ? avgTime.toFixed(2) : '0.00';
+                    if (avgResponseTimeEl) avgResponseTimeEl.textContent = avgTimeStr + 's';
+                    console.log('Stats loaded successfully');
                 }
             } catch (error) {
                 console.error('Error loading stats:', error);
@@ -488,23 +505,45 @@
 
         async function loadDocuments() {
             try {
-                const response = await fetch(`${API_BASE}/documents/`);
+                console.log('Loading documents...');
+                const response = await fetch(`${API_BASE}/documents/?t=${Date.now()}`);
                 const data = await response.json();
+                console.log('Documents data received:', data);
                 
                 const documentsList = document.getElementById('documentsList');
+                if (!documentsList) {
+                    console.error('documentsList element not found');
+                    return;
+                }
+                
                 documentsList.innerHTML = '';
                 
-                if (data.length === 0) {
+                // Handle the API response structure: {documents: [], total: 0}
+                const documents = data.documents || data;
+                console.log('Documents array:', documents, 'Is array:', Array.isArray(documents));
+                
+                // Ensure documents is an array
+                if (!Array.isArray(documents)) {
+                    console.error('Documents data is not an array:', documents);
+                    documentsList.innerHTML = '<div class="error-message">Invalid data format</div>';
+                    return;
+                }
+                
+                if (documents.length === 0) {
                     documentsList.innerHTML = '<div class="empty-documents">No documents uploaded yet</div>';
                 } else {
-                    data.forEach(doc => {
+                    documents.forEach(doc => {
                         const docElement = createDocumentElement(doc);
                         documentsList.appendChild(docElement);
                     });
                 }
+                console.log('Documents loaded successfully');
             } catch (error) {
                 console.error('Error loading documents:', error);
-                document.getElementById('documentsList').innerHTML = '<div class="error-message">Error loading documents</div>';
+                const documentsList = document.getElementById('documentsList');
+                if (documentsList) {
+                    documentsList.innerHTML = '<div class="error-message">Error loading documents</div>';
+                }
             }
         }
 

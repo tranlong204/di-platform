@@ -8,12 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from sqlalchemy.orm import Session
 import uvicorn
 from loguru import logger
 import os
 
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import init_db, get_db
 from app.api.routes import documents, queries, agents, monitoring
 from app.services.monitoring import setup_monitoring
 
@@ -67,6 +68,13 @@ async def root():
     """Root endpoint - redirect to web UI"""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/web/")
+
+
+@app.get("/api/v1/stats")
+async def get_stats(db: Session = Depends(get_db)):
+    """Get system statistics"""
+    from app.api.routes.monitoring import get_system_stats
+    return await get_system_stats(db)
 
 
 @app.get("/api")

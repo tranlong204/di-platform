@@ -4,16 +4,11 @@ Agent orchestration service for multi-step workflows
 
 import json
 import time
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from loguru import logger
 
-from langchain.agents import AgentExecutor, create_openai_tools_agent
-from langchain.tools import Tool
-from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.schema import HumanMessage, SystemMessage
-
+from openai import OpenAI
 from app.core.config import settings
 from app.services.rag_service import RAGQueryService
 from app.services.vector_store import VectorStoreService
@@ -24,114 +19,14 @@ class AgentOrchestrationService:
     """Service for orchestrating multi-step agent workflows"""
     
     def __init__(self):
-        self.llm = ChatOpenAI(
-            model=settings.openai_model,
-            openai_api_key=settings.openai_api_key,
-            temperature=0.1
-        )
+        self.client = OpenAI(api_key=settings.openai_api_key)
         self.rag_service = RAGQueryService()
         self.vector_store = VectorStoreService()
-        
-        # Available tools for agents
-        self.tools = self._create_tools()
-        
-        # Agent prompt template
-        self.agent_prompt = self._create_agent_prompt()
-    
-    def _create_tools(self) -> List[Tool]:
-        """Create available tools for agents"""
-        return [
-            Tool(
-                name="document_search",
-                description="Search for information across all documents in the knowledge base",
-                func=self._search_documents
-            ),
-            Tool(
-                name="multi_document_search",
-                description="Search for information across specific documents",
-                func=self._search_specific_documents
-            ),
-            Tool(
-                name="document_summary",
-                description="Get a summary of a specific document",
-                func=self._get_document_summary
-            ),
-            Tool(
-                name="cross_document_analysis",
-                description="Analyze information across multiple documents",
-                func=self._cross_document_analysis
-            ),
-            Tool(
-                name="fact_checking",
-                description="Verify facts by searching multiple sources",
-                func=self._fact_checking
-            ),
-            Tool(
-                name="trend_analysis",
-                description="Analyze trends across multiple documents",
-                func=self._trend_analysis
-            )
-        ]
-    
-    def _create_agent_prompt(self) -> ChatPromptTemplate:
-        """Create agent prompt template"""
-        system_message = """You are an advanced AI research assistant with access to a comprehensive document knowledge base. 
-        You can perform complex multi-step research workflows to answer questions thoroughly.
-        
-        Available capabilities:
-        - Search across all documents or specific documents
-        - Cross-document analysis and comparison
-        - Fact-checking and verification
-        - Trend analysis across multiple sources
-        - Document summarization
-        
-        When answering complex questions:
-        1. Break down the question into sub-questions if needed
-        2. Use multiple tools to gather comprehensive information
-        3. Synthesize findings from multiple sources
-        4. Provide well-reasoned conclusions with citations
-        
-        Always be thorough and cite your sources."""
-        
-        return ChatPromptTemplate.from_messages([
-            ("system", system_message),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad")
-        ])
-    
-    async def create_agent(
-        self, 
-        name: str, 
-        description: str, 
-        workflow_config: Dict[str, Any],
-        db: Session
-    ) -> Agent:
-        """Create a new agent"""
-        try:
-            agent = Agent(
-                name=name,
-                description=description,
-                workflow_config=workflow_config,
-                tools=[tool.name for tool in self.tools]
-            )
-            
-            db.add(agent)
-            db.commit()
-            db.refresh(agent)
-            
-            logger.info(f"Created agent: {name}")
-            return agent
-            
-        except Exception as e:
-            logger.error(f"Error creating agent: {str(e)}")
-            db.rollback()
-            raise
     
     async def execute_agent_workflow(
         self, 
         agent_id: int, 
-        query: str, 
+        query_id: int, 
         db: Session
     ) -> Dict[str, Any]:
         """Execute an agent workflow"""
@@ -143,54 +38,42 @@ class AgentOrchestrationService:
             if not agent:
                 raise ValueError(f"Agent {agent_id} not found")
             
-            # Create agent executor
-            agent_executor = create_openai_tools_agent(
-                llm=self.llm,
-                tools=self.tools,
-                prompt=self.agent_prompt
-            )
+            # Get query
+            query = db.query(Query).filter(Query.id == query_id).first()
+            if not query:
+                raise ValueError(f"Query {query_id} not found")
             
-            executor = AgentExecutor(
-                agent=agent_executor,
-                tools=self.tools,
-                verbose=True,
-                max_iterations=10,
-                early_stopping_method="generate"
-            )
+            # Execute workflow steps
+            workflow_config = agent.workflow_config
+            steps = workflow_config.get('steps', [])
             
-            # Execute the workflow
             execution_steps = []
+            final_result = ""
             
-            def log_step(step: Dict[str, Any]):
-                execution_steps.append(step)
-                logger.info(f"Agent step: {step}")
-            
-            # Add step logging
-            original_run = executor.run
-            
-            def logged_run(input_data):
-                result = original_run(input_data)
-                log_step({
-                    "input": input_data,
-                    "output": result,
-                    "timestamp": time.time()
+            for step in steps:
+                step_result = await self._execute_step(step, query.query_text, db)
+                execution_steps.append({
+                    'step_name': step.get('name', 'unknown'),
+                    'result': step_result,
+                    'timestamp': time.time()
                 })
-                return result
+                
+                # Use step result for next step if needed
+                if step.get('use_result_for_next', False):
+                    query.query_text = step_result
             
-            executor.run = logged_run
-            
-            # Execute the agent
-            result = executor.run(query)
-            
-            execution_time = time.time() - start_time
+            # Generate final result
+            final_result = await self._generate_final_result(
+                query.query_text, execution_steps, agent
+            )
             
             # Save execution record
             execution = AgentExecution(
                 agent_id=agent_id,
-                query_id=None,  # Will be linked if query is saved
+                query_id=query_id,
                 execution_steps=execution_steps,
-                final_result=result,
-                execution_time=execution_time,
+                final_result=final_result,
+                execution_time=time.time() - start_time,
                 success=True
             )
             
@@ -198,15 +81,13 @@ class AgentOrchestrationService:
             db.commit()
             db.refresh(execution)
             
-            logger.info(f"Agent workflow completed in {execution_time:.2f}s")
-            
             return {
                 'execution_id': execution.id,
                 'agent_id': agent_id,
-                'query': query,
-                'result': result,
+                'query_id': query_id,
+                'final_result': final_result,
                 'execution_steps': execution_steps,
-                'execution_time': execution_time,
+                'execution_time': time.time() - start_time,
                 'success': True
             }
             
@@ -216,9 +97,9 @@ class AgentOrchestrationService:
             # Save failed execution
             execution = AgentExecution(
                 agent_id=agent_id,
-                query_id=None,
+                query_id=query_id,
                 execution_steps=[],
-                final_result=None,
+                final_result="",
                 execution_time=time.time() - start_time,
                 success=False,
                 error_message=str(e)
@@ -229,93 +110,123 @@ class AgentOrchestrationService:
             
             raise
     
-    # Tool implementations
-    def _search_documents(self, query: str) -> str:
-        """Search across all documents"""
-        try:
-            # This would be called synchronously by the agent
-            # In a real implementation, you'd need to handle async/sync conversion
-            return f"Searching documents for: {query}\n[This would return actual search results]"
-        except Exception as e:
-            return f"Error searching documents: {str(e)}"
+    async def _execute_step(self, step: Dict[str, Any], query: str, db: Session) -> str:
+        """Execute a single workflow step"""
+        step_type = step.get('type', 'rag')
+        
+        if step_type == 'rag':
+            # Use RAG service
+            result = await self.rag_service.process_query(query, db)
+            return result.get('response', '')
+        
+        elif step_type == 'search':
+            # Vector search
+            docs = await self.vector_store.search_similar_documents(query, k=5)
+            return f"Found {len(docs)} relevant documents"
+        
+        elif step_type == 'summarize':
+            # Summarize using OpenAI
+            response = self.client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {"role": "system", "content": "Summarize the following text concisely:"},
+                    {"role": "user", "content": query}
+                ],
+                max_tokens=500,
+                temperature=0.3
+            )
+            return response.choices[0].message.content
+        
+        else:
+            return f"Unknown step type: {step_type}"
     
-    def _search_specific_documents(self, query_and_docs: str) -> str:
-        """Search specific documents"""
-        try:
-            # Parse query and document IDs from input
-            parts = query_and_docs.split("|")
-            query = parts[0]
-            doc_ids = [int(x.strip()) for x in parts[1].split(",")] if len(parts) > 1 else []
-            
-            return f"Searching documents {doc_ids} for: {query}\n[This would return actual search results]"
-        except Exception as e:
-            return f"Error searching specific documents: {str(e)}"
-    
-    def _get_document_summary(self, document_id: str) -> str:
-        """Get document summary"""
-        try:
-            doc_id = int(document_id)
-            return f"Summary of document {doc_id}:\n[This would return actual document summary]"
-        except Exception as e:
-            return f"Error getting document summary: {str(e)}"
-    
-    def _cross_document_analysis(self, analysis_query: str) -> str:
-        """Cross-document analysis"""
-        try:
-            return f"Cross-document analysis for: {analysis_query}\n[This would return analysis results]"
-        except Exception as e:
-            return f"Error in cross-document analysis: {str(e)}"
-    
-    def _fact_checking(self, fact_query: str) -> str:
-        """Fact checking across sources"""
-        try:
-            return f"Fact checking: {fact_query}\n[This would return verification results]"
-        except Exception as e:
-            return f"Error in fact checking: {str(e)}"
-    
-    def _trend_analysis(self, trend_query: str) -> str:
-        """Trend analysis across documents"""
-        try:
-            return f"Trend analysis for: {trend_query}\n[This would return trend analysis]"
-        except Exception as e:
-            return f"Error in trend analysis: {str(e)}"
-    
-    async def get_agent_executions(
+    async def _generate_final_result(
         self, 
-        agent_id: int, 
-        db: Session, 
-        limit: int = 50
-    ) -> List[AgentExecution]:
-        """Get agent execution history"""
-        return db.query(AgentExecution).filter(
-            AgentExecution.agent_id == agent_id
-        ).order_by(AgentExecution.created_at.desc()).limit(limit).all()
+        query: str, 
+        steps: List[Dict[str, Any]], 
+        agent: Agent
+    ) -> str:
+        """Generate final result from workflow steps"""
+        try:
+            # Prepare context from steps
+            context = "Workflow Steps:\n"
+            for i, step in enumerate(steps, 1):
+                context += f"{i}. {step['step_name']}: {step['result']}\n"
+            
+            # Generate final response
+            response = self.client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {"role": "system", "content": f"You are executing a workflow for: {agent.description}. Use the workflow results to provide a comprehensive answer."},
+                    {"role": "user", "content": f"Original Query: {query}\n\n{context}\n\nProvide a final comprehensive answer based on the workflow results."}
+                ],
+                max_tokens=settings.max_tokens,
+                temperature=0.2
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"Error generating final result: {str(e)}")
+            return "I encountered an error while generating the final result. Please try again."
     
-    async def get_all_agents(self, db: Session) -> List[Agent]:
-        """Get all agents"""
-        return db.query(Agent).filter(Agent.active == True).all()
+    async def create_agent(
+        self, 
+        name: str, 
+        description: str, 
+        workflow_config: Dict[str, Any], 
+        db: Session
+    ) -> Agent:
+        """Create a new agent"""
+        agent = Agent(
+            name=name,
+            description=description,
+            workflow_config=workflow_config,
+            active=True
+        )
+        
+        db.add(agent)
+        db.commit()
+        db.refresh(agent)
+        
+        return agent
+    
+    async def get_agent(self, agent_id: int, db: Session) -> Optional[Agent]:
+        """Get agent by ID"""
+        return db.query(Agent).filter(Agent.id == agent_id).first()
+    
+    async def list_agents(self, db: Session, active_only: bool = True) -> List[Agent]:
+        """List all agents"""
+        query = db.query(Agent)
+        if active_only:
+            query = query.filter(Agent.active == True)
+        return query.all()
     
     async def update_agent(
         self, 
         agent_id: int, 
         updates: Dict[str, Any], 
         db: Session
-    ) -> bool:
-        """Update agent configuration"""
-        try:
-            agent = db.query(Agent).filter(Agent.id == agent_id).first()
-            if not agent:
-                return False
-            
-            for key, value in updates.items():
-                if hasattr(agent, key):
-                    setattr(agent, key, value)
-            
-            db.commit()
-            logger.info(f"Updated agent {agent_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating agent: {str(e)}")
-            db.rollback()
+    ) -> Optional[Agent]:
+        """Update an agent"""
+        agent = await self.get_agent(agent_id, db)
+        if not agent:
+            return None
+        
+        for key, value in updates.items():
+            if hasattr(agent, key):
+                setattr(agent, key, value)
+        
+        db.commit()
+        db.refresh(agent)
+        return agent
+    
+    async def delete_agent(self, agent_id: int, db: Session) -> bool:
+        """Delete an agent"""
+        agent = await self.get_agent(agent_id, db)
+        if not agent:
             return False
+        
+        db.delete(agent)
+        db.commit()
+        return True
