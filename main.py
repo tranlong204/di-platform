@@ -220,9 +220,9 @@ async def process_query(query_data: dict):
         try:
             # Save to Supabase queries table
             supabase_response = supabase.table("queries").insert({
-                "query": query_text,
-                "response": response,
-                "created_at": datetime.now().isoformat(),
+                "query_text": query_text,
+                "response_text": response,
+                "query_hash": f"hash_{len(query_text)}_{hash(query_text)}",
                 "processing_time": query_record["processing_time"]
             }).execute()
             
@@ -290,10 +290,11 @@ async def upload_document(file: UploadFile = File(...)):
                 "file_path": f"/uploads/{file.filename}",  # Virtual path
                 "file_type": file_extension,
                 "file_size": len(content),
-                "uploaded_at": datetime.now().isoformat(),
-                "processed": True if extracted_text else False,
-                "content": extracted_text[:1000] if extracted_text else "",
-                "full_content": extracted_text
+                "content_hash": f"hash_{len(content)}_{file.filename}",  # Simple hash
+                "title": file.filename,
+                "summary": extracted_text[:500] if extracted_text else "",
+                "metadata_json": {"full_content": extracted_text, "chunks": 1 if extracted_text else 0},
+                "processed": True if extracted_text else False
             }).execute()
             
             # Also store in memory for immediate access
