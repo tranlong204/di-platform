@@ -15,12 +15,14 @@ from docx import Document
 from io import BytesIO
 from supabase import create_client, Client
 from pydantic_settings import BaseSettings
+from openai import OpenAI
 
-# Supabase Configuration
+# Configuration
 class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
     supabase_service_key: str = ""
+    openai_api_key: str = ""
     
     class Config:
         env_file = ".env"
@@ -29,6 +31,9 @@ settings = Settings()
 
 # Initialize Supabase client
 supabase: Client = create_client(settings.supabase_url, settings.supabase_key)
+
+# Initialize OpenAI client
+openai_client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
 
 # Simple in-memory storage for demo (in production, use Supabase)
 documents_storage = []
@@ -70,6 +75,37 @@ def extract_text_from_document(content: bytes, file_extension: str) -> str:
     except Exception as e:
         print(f"Error extracting text: {e}")
         return ""
+
+
+def generate_chatgpt_response(query: str, document_content: str, filename: str) -> str:
+    """Generate response using ChatGPT API"""
+    if not openai_client:
+        return "ChatGPT API not configured. Please set OPENAI_API_KEY environment variable."
+    
+    try:
+        # Create a context-aware prompt
+        system_prompt = f"""You are a helpful document intelligence assistant. You have access to the following document content and should answer questions based on it.
+
+Document: {filename}
+Content: {document_content[:4000]}  # Limit content to avoid token limits
+
+Please provide a helpful, accurate response based on the document content. If the question cannot be answered from the document, say so clearly."""
+
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query}
+            ],
+            max_tokens=1000,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content.strip()
+    
+    except Exception as e:
+        print(f"ChatGPT API error: {e}")
+        return f"Error generating response: {str(e)}"
 
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list:
@@ -238,7 +274,7 @@ async def process_query(query_data: dict):
             "processing_time": 0
         }
         
-        # Simple response logic (in production, you'd use AI/RAG)
+        # Generate response using ChatGPT API
         response = "I'm here to help answer questions about your uploaded documents."
         
         # Search through uploaded documents for relevant content
@@ -256,6 +292,7 @@ async def process_query(query_data: dict):
             documents_to_search = documents_storage
         
         if documents_to_search:
+            # Use ChatGPT to generate intelligent responses
             for doc in documents_to_search:
                 # Get content from either Supabase metadata or memory storage
                 full_content = ""
@@ -265,45 +302,9 @@ async def process_query(query_data: dict):
                     full_content = doc["full_content"]
                 
                 if full_content:
-                    content = full_content.lower()
-                    query_lower = query_text.lower()
-                    
-                    # Look for specific information in the document
-                    if "who is" in query_lower and "long tran" in query_lower:
-                        # Extract relevant information about Long Tran from the document
-                        lines = full_content.split('\n')
-                        relevant_info = []
-                        
-                        for line in lines:
-                            line_lower = line.lower()
-                            if any(keyword in line_lower for keyword in ['long tran', 'experience', 'education', 'skills', 'summary', 'objective']):
-                                relevant_info.append(line.strip())
-                        
-                        if relevant_info:
-                            response = f"Based on the document '{doc['filename']}', here's what I found about Long Tran:\n\n" + "\n".join(relevant_info[:5])  # Show first 5 relevant lines
-                        else:
-                            response = f"I found the document '{doc['filename']}' but couldn't extract specific information about Long Tran. The document contains: {full_content[:200]}..."
-                    
-                    elif "what" in query_lower or "tell me" in query_lower:
-                        # General information extraction
-                        response = f"Based on the document '{doc['filename']}', here's some information:\n\n{full_content[:500]}..."
-                        break
-                    
-                    elif any(keyword in query_lower for keyword in ['experience', 'education', 'skills', 'work', 'job']):
-                        # Look for specific sections
-                        lines = full_content.split('\n')
-                        relevant_lines = []
-                        
-                        for line in lines:
-                            line_lower = line.lower()
-                            if any(keyword in line_lower for keyword in ['experience', 'education', 'skills', 'work', 'job', 'position', 'degree']):
-                                relevant_lines.append(line.strip())
-                        
-                        if relevant_lines:
-                            response = f"Here's relevant information from '{doc['filename']}':\n\n" + "\n".join(relevant_lines[:10])
-                        else:
-                            response = f"I found the document '{doc['filename']}' but couldn't find specific information about that topic. The document contains: {full_content[:300]}..."
-                        break
+                    # Generate ChatGPT response
+                    response = generate_chatgpt_response(query_text, full_content, doc['filename'])
+                    break
         else:
             response = "I don't see any uploaded documents. Please upload a document first, then ask questions about its content."
         
