@@ -71,7 +71,53 @@ async def get_documents():
 @app.get("/api/v1/queries/history")
 async def get_query_history():
     """Get query history"""
-    return {"queries": [], "total": 0}
+    return {"queries": queries_storage, "total": len(queries_storage)}
+
+
+@app.post("/api/v1/queries/")
+async def process_query(query_data: dict):
+    """Process a query/question"""
+    try:
+        query_text = query_data.get("query", "")
+        if not query_text:
+            return {"error": "No query provided"}
+        
+        # Create query record
+        query_id = len(queries_storage) + 1
+        query_record = {
+            "id": query_id,
+            "query": query_text,
+            "response": "",
+            "created_at": datetime.now().isoformat(),
+            "processing_time": 0
+        }
+        
+        # Simple response logic (in production, you'd use AI/RAG)
+        if "who is" in query_text.lower():
+            # Look for document names in the query
+            if "long tran" in query_text.lower():
+                response = "Based on the uploaded document 'Long_Tran_Resume.pdf', Long Tran appears to be the document owner. However, I cannot access the document content to provide specific details about Long Tran's background, experience, or qualifications. To get detailed information, the document would need to be processed and indexed."
+            else:
+                response = "I can help answer questions about uploaded documents. Please make sure you have uploaded a document and ask specific questions about its content."
+        elif "what" in query_text.lower():
+            response = "I can help answer questions about your uploaded documents. Please ask specific questions about the content of your documents."
+        else:
+            response = "I'm here to help answer questions about your uploaded documents. Please ask specific questions about the document content."
+        
+        query_record["response"] = response
+        query_record["processing_time"] = 0.5  # Simulated processing time
+        
+        # Store the query
+        queries_storage.append(query_record)
+        
+        return {
+            "query_id": query_id,
+            "response": response,
+            "processing_time": query_record["processing_time"]
+        }
+        
+    except Exception as e:
+        return {"error": f"Query processing failed: {str(e)}"}
 
 
 @app.post("/api/v1/documents/upload")
