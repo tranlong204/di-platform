@@ -227,6 +227,29 @@ async def get_document_chunks(document_id: int):
     return {"chunks": [], "total": 0, "document_id": document_id}
 
 
+@app.get("/api/v1/documents/{document_id}")
+async def get_document(document_id: int):
+    """Get a specific document by ID"""
+    try:
+        # Fetch document from Supabase
+        supabase_response = supabase.table("documents").select("*").eq("id", document_id).execute()
+        if supabase_response.data:
+            doc = supabase_response.data[0]
+            return {
+                "id": doc["id"],
+                "filename": doc["filename"],
+                "file_type": doc["file_type"],
+                "file_size": doc["file_size"],
+                "chunks_count": doc.get("metadata_json", {}).get("chunks", 0),
+                "processed": doc["processed"],
+                "created_at": doc["created_at"]
+            }
+    except Exception as e:
+        print(f"Supabase fetch failed: {e}")
+    
+    return {"error": f"Document {document_id} not found"}
+
+
 @app.delete("/api/v1/documents/{document_id}")
 async def delete_document(document_id: int):
     """Delete a document and its chunks"""
