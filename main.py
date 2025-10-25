@@ -92,7 +92,7 @@ Content: {document_content[:4000]}  # Limit content to avoid token limits
 Please provide a helpful, accurate response based on the document content. If the question cannot be answered from the document, say so clearly."""
 
         response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": query}
