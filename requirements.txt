@@ -11,3 +11,5 @@ supabase>=2.0.0
 postgrest>=0.13.0
 loguru>=0.7.0
 sqlalchemy>=2.0.0
+pypdf2>=3.0.0
+python-docx>=0.8.11

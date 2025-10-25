@@ -2,11 +2,24 @@
 Document Intelligence Platform - Minimal Vercel Version
 """
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
+from datetime import datetime
 import os
+import json
+
+# Simple in-memory storage for demo (in production, use Supabase)
+documents_storage = []
+queries_storage = []
+
+# Database dependency (simplified for Vercel)
+def get_db():
+    # In a real implementation, this would return a database session
+    # For now, we'll use in-memory storage
+    return None
 
 
 # Create FastAPI application
@@ -41,10 +54,10 @@ async def root():
 async def get_stats():
     """Get system statistics"""
     return {
-        "documents": {"total": 0, "processed": 0, "pending": 0},
-        "queries": {"total": 0, "average_processing_time": 0},
+        "documents": {"total": len(documents_storage), "processed": 0, "pending": len(documents_storage)},
+        "queries": {"total": len(queries_storage), "average_processing_time": 0},
         "agents": {"total_executions": 0, "successful_executions": 0, "success_rate": 0.0},
-        "vector_store": {"total_vectors": 0, "dimension": 0, "index_type": "none", "documents_count": 0},
+        "vector_store": {"total_vectors": 0, "dimension": 0, "index_type": "none", "documents_count": len(documents_storage)},
         "cache": {"total_keys": 0, "memory_usage": "0B", "hit_rate": 0.0, "connected_clients": 0}
     }
 
@@ -52,7 +65,7 @@ async def get_stats():
 @app.get("/api/v1/documents/")
 async def get_documents():
     """Get all documents"""
-    return {"documents": [], "total": 0}
+    return {"documents": documents_storage, "total": len(documents_storage)}
 
 
 @app.get("/api/v1/queries/history")
@@ -76,12 +89,24 @@ async def upload_document(file: UploadFile = File(...)):
         if file_extension not in allowed_types:
             return {"error": f"File type not supported. Allowed types: {', '.join(allowed_types)}"}
         
-        # For now, just return success (in a real implementation, you'd save the file)
-        return {
-            "message": f"Document '{file.filename}' uploaded successfully",
+        # Create document record
+        document_id = len(documents_storage) + 1
+        document_record = {
+            "id": document_id,
             "filename": file.filename,
             "size": len(content),
-            "type": file_extension
+            "type": file_extension,
+            "uploaded_at": datetime.now().isoformat(),
+            "processed": False,
+            "chunks": 0
+        }
+        
+        # Store the document
+        documents_storage.append(document_record)
+        
+        return {
+            "message": f"Document '{file.filename}' uploaded successfully",
+            "document": document_record
         }
         
     except Exception as e:
