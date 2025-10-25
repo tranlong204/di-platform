@@ -26,7 +26,7 @@ app.add_middleware(
 )
 
 # Mount static files (web UI)
-web_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
+web_dir = "web"
 if os.path.exists(web_dir):
     app.mount("/web", StaticFiles(directory=web_dir, html=True), name="web")
 
