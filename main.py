@@ -191,6 +191,35 @@ async def get_document_chunks(document_id: int):
     return {"chunks": [], "total": 0, "document_id": document_id}
 
 
+@app.delete("/api/v1/documents/{document_id}")
+async def delete_document(document_id: int):
+    """Delete a document and its chunks"""
+    try:
+        # First, delete all chunks associated with this document
+        try:
+            supabase.table("document_chunks").delete().eq("document_id", document_id).execute()
+            print(f"Deleted chunks for document {document_id}")
+        except Exception as chunk_error:
+            print(f"Error deleting chunks: {chunk_error}")
+        
+        # Then delete the document itself
+        try:
+            supabase_response = supabase.table("documents").delete().eq("id", document_id).execute()
+            if supabase_response.data:
+                return {
+                    "message": f"Document {document_id} deleted successfully",
+                    "deleted_chunks": True,
+                    "document_id": document_id
+                }
+            else:
+                return {"error": f"Document {document_id} not found"}
+        except Exception as doc_error:
+            return {"error": f"Failed to delete document: {str(doc_error)}"}
+    
+    except Exception as e:
+        return {"error": f"Document deletion failed: {str(e)}"}
+
+
 @app.post("/api/v1/queries/")
 async def process_query(query_data: dict):
     """Process a query/question"""
