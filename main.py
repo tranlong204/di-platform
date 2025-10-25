@@ -72,6 +72,37 @@ def extract_text_from_document(content: bytes, file_extension: str) -> str:
         return ""
 
 
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list:
+    """Split text into overlapping chunks"""
+    if not text:
+        return []
+    
+    chunks = []
+    start = 0
+    
+    while start < len(text):
+        end = start + chunk_size
+        
+        # Try to break at sentence boundary
+        if end < len(text):
+            # Look for sentence endings within the last 100 characters
+            for i in range(end, max(start + chunk_size - 100, start), -1):
+                if text[i] in '.!?':
+                    end = i + 1
+                    break
+        
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        
+        # Move start position with overlap
+        start = end - overlap
+        if start >= len(text):
+            break
+    
+    return chunks
+
+
 # Create FastAPI application
 app = FastAPI(
     title="Document Intelligence Platform",
@@ -144,6 +175,20 @@ async def get_query_history():
     
     # Fallback to memory storage
     return {"queries": queries_storage, "total": len(queries_storage)}
+
+
+@app.get("/api/v1/documents/{document_id}/chunks")
+async def get_document_chunks(document_id: int):
+    """Get chunks for a specific document"""
+    try:
+        # Fetch chunks from Supabase
+        supabase_response = supabase.table("document_chunks").select("*").eq("document_id", document_id).order("chunk_index").execute()
+        if supabase_response.data:
+            return {"chunks": supabase_response.data, "total": len(supabase_response.data), "document_id": document_id}
+    except Exception as e:
+        print(f"Supabase fetch failed: {e}")
+    
+    return {"chunks": [], "total": 0, "document_id": document_id}
 
 
 @app.post("/api/v1/queries/")
@@ -290,6 +335,9 @@ async def upload_document(file: UploadFile = File(...)):
         # Extract text from document
         extracted_text = extract_text_from_document(content, file_extension)
         
+        # Create chunks from the extracted text
+        chunks = chunk_text(extracted_text) if extracted_text else []
+        
         document_record = {
             "id": document_id,
             "filename": file.filename,
@@ -297,7 +345,7 @@ async def upload_document(file: UploadFile = File(...)):
             "type": file_extension,
             "uploaded_at": datetime.now().isoformat(),
             "processed": True if extracted_text else False,
-            "chunks": 1 if extracted_text else 0,
+            "chunks": len(chunks),
             "content": extracted_text[:1000] if extracted_text else "",  # Store first 1000 chars for demo
             "full_content": extracted_text  # Store full content for querying
         }
@@ -313,9 +361,29 @@ async def upload_document(file: UploadFile = File(...)):
                 "content_hash": f"hash_{len(content)}_{file.filename}",  # Simple hash
                 "title": file.filename,
                 "summary": extracted_text[:500] if extracted_text else "",
-                "metadata_json": {"full_content": extracted_text, "chunks": 1 if extracted_text else 0},
+                "metadata_json": {"full_content": extracted_text, "chunks": len(chunks)},
                 "processed": True if extracted_text else False
             }).execute()
+            
+            document_supabase_id = supabase_response.data[0]["id"] if supabase_response.data else None
+            
+            # Save chunks to document_chunks table
+            if chunks and document_supabase_id:
+                chunk_records = []
+                for i, chunk in enumerate(chunks):
+                    chunk_record = {
+                        "document_id": document_supabase_id,
+                        "chunk_index": i,
+                        "content": chunk,
+                        "content_hash": f"chunk_{i}_{hash(chunk)}",
+                        "token_count": len(chunk.split()),  # Approximate token count
+                        "metadata_json": {"chunk_size": len(chunk), "overlap": 200 if i > 0 else 0}
+                    }
+                    chunk_records.append(chunk_record)
+                
+                # Insert all chunks at once
+                if chunk_records:
+                    supabase.table("document_chunks").insert(chunk_records).execute()
             
             # Also store in memory for immediate access
             documents_storage.append(document_record)
@@ -323,7 +391,8 @@ async def upload_document(file: UploadFile = File(...)):
             return {
                 "message": f"Document '{file.filename}' uploaded successfully",
                 "document": document_record,
-                "supabase_id": supabase_response.data[0]["id"] if supabase_response.data else None
+                "supabase_id": document_supabase_id,
+                "chunks_created": len(chunks)
             }
         except Exception as db_error:
             # Fallback to memory storage if Supabase fails
