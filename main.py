@@ -2,7 +2,7 @@
 Document Intelligence Platform - Minimal Vercel Version
 """
 
-from fastapi import FastAPI, UploadFile, File, Form, Depends
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,7 +30,8 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Initialize Supabase client
-supabase: Client = create_client(settings.supabase_url, settings.supabase_key)
+supabase_server_key = settings.supabase_service_key or settings.supabase_key
+supabase: Client = create_client(settings.supabase_url, supabase_server_key)
 
 # Initialize OpenAI client
 openai_client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
@@ -403,7 +404,8 @@ async def upload_document(file: UploadFile = File(...)):
             "full_content": extracted_text  # Store full content for querying
         }
         
-        # Store the document in Supabase
+        # Store the document in Supabase.
+        # This endpoint must persist to DB; do not silently degrade to memory-only mode.
         try:
             # Save to Supabase documents table
             supabase_response = supabase.table("documents").insert({
@@ -448,14 +450,13 @@ async def upload_document(file: UploadFile = File(...)):
                 "chunks_created": len(chunks)
             }
         except Exception as db_error:
-            # Fallback to memory storage if Supabase fails
-            documents_storage.append(document_record)
-            return {
-                "message": f"Document '{file.filename}' uploaded successfully (memory only)",
-                "document": document_record,
-                "warning": f"Database save failed: {str(db_error)}"
-            }
+            raise HTTPException(
+                status_code=500,
+                detail=f"Upload failed to persist in Supabase: {str(db_error)}"
+            )
         
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": f"Upload failed: {str(e)}"}
 
