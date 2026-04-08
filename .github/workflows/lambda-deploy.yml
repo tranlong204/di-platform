@@ -1,0 +1,59 @@
+name: Deploy Backend to AWS Lambda
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "main.py"
+      - "lambda_handler.py"
+      - "template.yaml"
+      - "requirements.txt"
+      - "requirements-lambda.txt"
+      - ".github/workflows/lambda-deploy.yml"
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: di-platform-lambda
+
+jobs:
+  deploy-lambda:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build SAM application
+        run: sam build --template-file template.yaml
+
+      - name: Deploy SAM application
+        run: |
+          sam deploy \
+            --stack-name "${STACK_NAME}" \
+            --region "${AWS_REGION}" \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --parameter-overrides \
+              SupabaseUrl="${{ secrets.SUPABASE_URL }}" \
+              SupabaseKey="${{ secrets.SUPABASE_KEY }}" \
+              SupabaseServiceKey="${{ secrets.SUPABASE_SERVICE_KEY }}" \
+              OpenAIApiKey="${{ secrets.OPENAI_API_KEY }}"

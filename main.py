@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     supabase_key: str
     supabase_service_key: str = ""
     openai_api_key: str = ""
+    api_base_url: str = ""
     
     class Config:
         env_file = ".env"
@@ -474,6 +475,13 @@ async def api_info():
             "health": "/health"
         }
     }
+
+
+@app.get("/api/config")
+async def api_config():
+    """Return runtime frontend configuration."""
+    api_base = settings.api_base_url.strip() if settings.api_base_url else "/api/v1"
+    return {"api_base": api_base}
 
 
 @app.get("/health")
