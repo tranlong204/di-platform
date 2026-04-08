@@ -82,30 +82,22 @@ def extract_text_from_document(content: bytes, file_extension: str) -> str:
                 print(f"pdfplumber fallback failed: {fallback_error}")
 
             # Fallback 2: AWS Textract OCR — handles image-based / scanned PDFs.
-            # Split into single pages so we can use the sync DetectDocumentText API.
+            # Pass the original PDF bytes directly; sync DetectDocumentText supports
+            # up to 15 pages / 10 MB when using the Bytes input parameter.
             try:
                 import boto3
                 textract = boto3.client("textract", region_name=os.getenv("AWS_REGION", "us-west-1"))
-                pdf_reader = PyPDF2.PdfReader(BytesIO(content))
-                all_text = []
-                for page_num in range(len(pdf_reader.pages)):
-                    writer = PyPDF2.PdfWriter()
-                    writer.add_page(pdf_reader.pages[page_num])
-                    page_buf = BytesIO()
-                    writer.write(page_buf)
-                    page_bytes = page_buf.getvalue()
-                    response = textract.detect_document_text(Document={"Bytes": page_bytes})
-                    lines = [
-                        block["Text"]
-                        for block in response.get("Blocks", [])
-                        if block.get("BlockType") == "LINE"
-                    ]
-                    if lines:
-                        all_text.append("\n".join(lines))
-                textract_text = "\n\n".join(all_text).strip()
+                response = textract.detect_document_text(Document={"Bytes": content})
+                lines = [
+                    block["Text"]
+                    for block in response.get("Blocks", [])
+                    if block.get("BlockType") == "LINE"
+                ]
+                textract_text = "\n".join(lines).strip()
                 if textract_text:
-                    print(f"Textract extracted {len(textract_text)} chars from {len(pdf_reader.pages)} pages")
+                    print(f"Textract extracted {len(textract_text)} chars")
                     return textract_text
+                print("Textract returned 0 lines — document may be unsupported")
             except Exception as textract_error:
                 print(f"Textract fallback failed: {textract_error}")
 
@@ -623,6 +615,25 @@ async def debug_extract(file: UploadFile = File(...)):
             }
         except Exception as e:
             diagnostics["errors"].append(f"pdfplumber: {e}")
+        # Test Textract directly so we can see exact errors/results
+        try:
+            import boto3
+            textract = boto3.client("textract", region_name=os.getenv("AWS_REGION", "us-west-1"))
+            tx_response = textract.detect_document_text(Document={"Bytes": content})
+            lines = [
+                block["Text"]
+                for block in tx_response.get("Blocks", [])
+                if block.get("BlockType") == "LINE"
+            ]
+            tx_text = "\n".join(lines).strip()
+            diagnostics["textract_result"] = {
+                "chars": len(tx_text),
+                "lines": len(lines),
+                "preview": tx_text[:300],
+            }
+        except Exception as e:
+            diagnostics["errors"].append(f"textract: {e}")
+            diagnostics["textract_result"] = {"error": str(e)}
     elif file_extension == ".docx":
         try:
             doc = Document(BytesIO(content))
