@@ -50,6 +50,78 @@ def get_db():
     return None
 
 
+def _textract_ocr(content: bytes, filename: str) -> str:
+    """
+    Upload PDF to S3 and run async Textract StartDocumentTextDetection.
+    Required for multi-page PDFs — sync DetectDocumentText only supports
+    single-page images (JPEG/PNG/TIFF), not PDFs passed as raw bytes.
+    Returns extracted text or empty string on failure.
+    """
+    import time
+    import boto3
+
+    s3_bucket = os.getenv("TEXTRACT_S3_BUCKET", "")
+    if not s3_bucket:
+        print("Textract OCR skipped: TEXTRACT_S3_BUCKET not set")
+        return ""
+
+    region = os.getenv("AWS_REGION", "us-west-1")
+    s3_key = f"textract-temp/{int(time.time())}-{filename}"
+
+    s3 = boto3.client("s3", region_name=region)
+    textract = boto3.client("textract", region_name=region)
+
+    try:
+        s3.put_object(Bucket=s3_bucket, Key=s3_key, Body=content)
+    except Exception as e:
+        print(f"Textract S3 upload failed: {e}")
+        return ""
+
+    try:
+        job = textract.start_document_text_detection(
+            DocumentLocation={"S3Object": {"Bucket": s3_bucket, "Name": s3_key}}
+        )
+        job_id = job["JobId"]
+
+        # Poll until complete (max ~90 s; Lambda timeout is 120 s)
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            result = textract.get_document_text_detection(JobId=job_id)
+            status = result["JobStatus"]
+            if status == "SUCCEEDED":
+                lines = []
+                while True:
+                    lines.extend(
+                        block["Text"]
+                        for block in result.get("Blocks", [])
+                        if block.get("BlockType") == "LINE"
+                    )
+                    next_token = result.get("NextToken")
+                    if not next_token:
+                        break
+                    result = textract.get_document_text_detection(
+                        JobId=job_id, NextToken=next_token
+                    )
+                text = "\n".join(lines).strip()
+                print(f"Textract async extracted {len(text)} chars")
+                return text
+            elif status == "FAILED":
+                print(f"Textract job failed: {result.get('StatusMessage', 'unknown')}")
+                return ""
+            time.sleep(3)
+
+        print("Textract job timed out after 90 s")
+        return ""
+    except Exception as e:
+        print(f"Textract async OCR failed: {e}")
+        return ""
+    finally:
+        try:
+            s3.delete_object(Bucket=s3_bucket, Key=s3_key)
+        except Exception:
+            pass
+
+
 def extract_text_from_document(content: bytes, file_extension: str) -> str:
     """Extract text from uploaded document"""
     try:
@@ -81,25 +153,12 @@ def extract_text_from_document(content: bytes, file_extension: str) -> str:
             except Exception as fallback_error:
                 print(f"pdfplumber fallback failed: {fallback_error}")
 
-            # Fallback 2: AWS Textract OCR — handles image-based / scanned PDFs.
-            # Pass the original PDF bytes directly; sync DetectDocumentText supports
-            # up to 15 pages / 10 MB when using the Bytes input parameter.
-            try:
-                import boto3
-                textract = boto3.client("textract", region_name=os.getenv("AWS_REGION", "us-west-1"))
-                response = textract.detect_document_text(Document={"Bytes": content})
-                lines = [
-                    block["Text"]
-                    for block in response.get("Blocks", [])
-                    if block.get("BlockType") == "LINE"
-                ]
-                textract_text = "\n".join(lines).strip()
-                if textract_text:
-                    print(f"Textract extracted {len(textract_text)} chars")
-                    return textract_text
-                print("Textract returned 0 lines — document may be unsupported")
-            except Exception as textract_error:
-                print(f"Textract fallback failed: {textract_error}")
+            # Fallback 2: AWS Textract async OCR — handles image-based / scanned PDFs.
+            # Sync DetectDocumentText does not support multi-page PDFs as bytes;
+            # we must upload to S3 and use StartDocumentTextDetection (async).
+            textract_text = _textract_ocr(content, "document.pdf")
+            if textract_text:
+                return textract_text
 
             return ""
         
@@ -615,21 +674,13 @@ async def debug_extract(file: UploadFile = File(...)):
             }
         except Exception as e:
             diagnostics["errors"].append(f"pdfplumber: {e}")
-        # Test Textract directly so we can see exact errors/results
+        # Test async Textract (S3-based) — proper path for multi-page PDFs
         try:
-            import boto3
-            textract = boto3.client("textract", region_name=os.getenv("AWS_REGION", "us-west-1"))
-            tx_response = textract.detect_document_text(Document={"Bytes": content})
-            lines = [
-                block["Text"]
-                for block in tx_response.get("Blocks", [])
-                if block.get("BlockType") == "LINE"
-            ]
-            tx_text = "\n".join(lines).strip()
+            tx_text = _textract_ocr(content, diagnostics["filename"])
             diagnostics["textract_result"] = {
                 "chars": len(tx_text),
-                "lines": len(lines),
                 "preview": tx_text[:300],
+                "s3_bucket": os.getenv("TEXTRACT_S3_BUCKET", "NOT SET"),
             }
         except Exception as e:
             diagnostics["errors"].append(f"textract: {e}")

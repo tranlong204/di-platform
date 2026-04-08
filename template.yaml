@@ -5,7 +5,7 @@ Description: Document Intelligence Platform FastAPI on AWS Lambda
 Globals:
   Function:
     Runtime: python3.12
-    Timeout: 60
+    Timeout: 120
     MemorySize: 1024
     Architectures:
       - x86_64
@@ -26,6 +26,16 @@ Parameters:
     Default: ""
 
 Resources:
+  TextractBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "di-platform-textract-${AWS::AccountId}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteTempFiles
+            Status: Enabled
+            ExpirationInDays: 1
+
   DiPlatformApiFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -38,12 +48,20 @@ Resources:
           SUPABASE_KEY: !Ref SupabaseKey
           SUPABASE_SERVICE_KEY: !Ref SupabaseServiceKey
           OPENAI_API_KEY: !Ref OpenAIApiKey
+          TEXTRACT_S3_BUCKET: !Ref TextractBucket
       Policies:
         - Statement:
             - Effect: Allow
               Action:
-                - textract:DetectDocumentText
+                - textract:StartDocumentTextDetection
+                - textract:GetDocumentTextDetection
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+                - s3:DeleteObject
+              Resource: !Sub "arn:aws:s3:::di-platform-textract-${AWS::AccountId}/*"
       Events:
         RootProxy:
           Type: Api
