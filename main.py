@@ -138,7 +138,19 @@ def extract_text_from_document(content: bytes, file_extension: str) -> str:
             if extracted:
                 return extracted
 
-            # Fallback 1: pdfplumber often extracts text from PDFs that PyPDF2 cannot.
+            # Fallback 1a: pypdf — maintained fork with better font/encoding support.
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(BytesIO(content))
+                pypdf_pages = [reader.pages[i].extract_text() or "" for i in range(len(reader.pages))]
+                pypdf_text = "\n".join(pypdf_pages).strip()
+                if pypdf_text:
+                    print(f"pypdf extracted {len(pypdf_text)} chars")
+                    return pypdf_text
+            except Exception as pypdf_error:
+                print(f"pypdf fallback failed: {pypdf_error}")
+
+            # Fallback 1b: pdfplumber often extracts text from PDFs that PyPDF2 cannot.
             try:
                 import pdfplumber
                 fallback_pages = []
@@ -674,14 +686,66 @@ async def debug_extract(file: UploadFile = File(...)):
             }
         except Exception as e:
             diagnostics["errors"].append(f"pdfplumber: {e}")
-        # Test async Textract (S3-based) — proper path for multi-page PDFs
+        # Test pypdf (maintained PyPDF2 fork with better encoding support)
         try:
-            tx_text = _textract_ocr(content, diagnostics["filename"])
-            diagnostics["textract_result"] = {
-                "chars": len(tx_text),
-                "preview": tx_text[:300],
-                "s3_bucket": os.getenv("TEXTRACT_S3_BUCKET", "NOT SET"),
+            import pypdf
+            reader = pypdf.PdfReader(BytesIO(content))
+            pages_text = [reader.pages[i].extract_text() or "" for i in range(len(reader.pages))]
+            full = "\n".join(pages_text).strip()
+            diagnostics["pypdf_result"] = {
+                "pages": len(reader.pages),
+                "chars": len(full),
+                "preview": full[:300],
+                "encrypted": reader.is_encrypted,
             }
+        except Exception as e:
+            diagnostics["errors"].append(f"pypdf: {e}")
+
+        # Test async Textract — expose raw block-type breakdown to diagnose 0-char results
+        try:
+            import time, boto3, collections
+            s3_bucket = os.getenv("TEXTRACT_S3_BUCKET", "")
+            region = os.getenv("AWS_REGION", "us-west-1")
+            if not s3_bucket:
+                diagnostics["textract_result"] = {"error": "TEXTRACT_S3_BUCKET not set"}
+            else:
+                s3_key = f"textract-debug/{int(time.time())}-{diagnostics['filename']}"
+                s3 = boto3.client("s3", region_name=region)
+                textract = boto3.client("textract", region_name=region)
+                s3.put_object(Bucket=s3_bucket, Key=s3_key, Body=content)
+                try:
+                    job = textract.start_document_text_detection(
+                        DocumentLocation={"S3Object": {"Bucket": s3_bucket, "Name": s3_key}}
+                    )
+                    job_id = job["JobId"]
+                    deadline = time.time() + 90
+                    job_status = "UNKNOWN"
+                    all_blocks = []
+                    while time.time() < deadline:
+                        result = textract.get_document_text_detection(JobId=job_id)
+                        job_status = result["JobStatus"]
+                        if job_status in ("SUCCEEDED", "FAILED"):
+                            all_blocks = result.get("Blocks", [])
+                            break
+                        time.sleep(3)
+                    block_counts = collections.Counter(b.get("BlockType") for b in all_blocks)
+                    lines = [b["Text"] for b in all_blocks if b.get("BlockType") == "LINE"]
+                    tx_text = "\n".join(lines).strip()
+                    diagnostics["textract_result"] = {
+                        "job_status": job_status,
+                        "doc_pages": result.get("DocumentMetadata", {}).get("Pages", "?"),
+                        "block_counts": dict(block_counts),
+                        "line_count": len(lines),
+                        "chars": len(tx_text),
+                        "preview": tx_text[:300],
+                        "s3_bucket": s3_bucket,
+                        "status_message": result.get("StatusMessage", ""),
+                    }
+                finally:
+                    try:
+                        s3.delete_object(Bucket=s3_bucket, Key=s3_key)
+                    except Exception:
+                        pass
         except Exception as e:
             diagnostics["errors"].append(f"textract: {e}")
             diagnostics["textract_result"] = {"error": str(e)}
