@@ -38,6 +38,12 @@ Resources:
           SUPABASE_KEY: !Ref SupabaseKey
           SUPABASE_SERVICE_KEY: !Ref SupabaseServiceKey
           OPENAI_API_KEY: !Ref OpenAIApiKey
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - textract:DetectDocumentText
+              Resource: "*"
       Events:
         RootProxy:
           Type: Api

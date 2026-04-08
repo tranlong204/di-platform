@@ -13,6 +13,8 @@ import json
 import PyPDF2
 from docx import Document
 from io import BytesIO
+import zipfile
+import xml.etree.ElementTree as ET
 from supabase import create_client, Client
 from pydantic_settings import BaseSettings
 from openai import OpenAI
@@ -54,18 +56,106 @@ def extract_text_from_document(content: bytes, file_extension: str) -> str:
         if file_extension == ".pdf":
             # Extract text from PDF
             pdf_reader = PyPDF2.PdfReader(BytesIO(content))
-            text = ""
+            pages_text = []
             for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-            return text.strip()
+                # Some PDFs/pages return None for extract_text(); skip safely.
+                page_text = page.extract_text() or ""
+                if page_text.strip():
+                    pages_text.append(page_text)
+            extracted = "\n".join(pages_text).strip()
+            if extracted:
+                return extracted
+
+            # Fallback 1: pdfplumber often extracts text from PDFs that PyPDF2 cannot.
+            try:
+                import pdfplumber
+                fallback_pages = []
+                with pdfplumber.open(BytesIO(content)) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text() or ""
+                        if page_text.strip():
+                            fallback_pages.append(page_text)
+                plumber_text = "\n".join(fallback_pages).strip()
+                if plumber_text:
+                    return plumber_text
+            except Exception as fallback_error:
+                print(f"pdfplumber fallback failed: {fallback_error}")
+
+            # Fallback 2: AWS Textract OCR — handles image-based / scanned PDFs.
+            # Split into single pages so we can use the sync DetectDocumentText API.
+            try:
+                import boto3
+                textract = boto3.client("textract", region_name=os.getenv("AWS_REGION", "us-west-1"))
+                pdf_reader = PyPDF2.PdfReader(BytesIO(content))
+                all_text = []
+                for page_num in range(len(pdf_reader.pages)):
+                    writer = PyPDF2.PdfWriter()
+                    writer.add_page(pdf_reader.pages[page_num])
+                    page_buf = BytesIO()
+                    writer.write(page_buf)
+                    page_bytes = page_buf.getvalue()
+                    response = textract.detect_document_text(Document={"Bytes": page_bytes})
+                    lines = [
+                        block["Text"]
+                        for block in response.get("Blocks", [])
+                        if block.get("BlockType") == "LINE"
+                    ]
+                    if lines:
+                        all_text.append("\n".join(lines))
+                textract_text = "\n\n".join(all_text).strip()
+                if textract_text:
+                    print(f"Textract extracted {len(textract_text)} chars from {len(pdf_reader.pages)} pages")
+                    return textract_text
+            except Exception as textract_error:
+                print(f"Textract fallback failed: {textract_error}")
+
+            return ""
         
         elif file_extension == ".docx":
             # Extract text from DOCX
-            doc = Document(BytesIO(content))
-            text = ""
-            for paragraph in doc.paragraphs:
-                text += paragraph.text + "\n"
-            return text.strip()
+            try:
+                doc = Document(BytesIO(content))
+                text = ""
+                for paragraph in doc.paragraphs:
+                    text += paragraph.text + "\n"
+                extracted = text.strip()
+                if extracted:
+                    return extracted
+            except Exception as docx_error:
+                print(f"python-docx extraction failed: {docx_error}")
+
+            # Fallback: parse DOCX XML directly (DOCX is a zip archive).
+            # Read all Word XML parts (document, headers, footers, notes, etc.)
+            # to handle files where body text is not only in word/document.xml.
+            try:
+                with zipfile.ZipFile(BytesIO(content)) as zf:
+                    xml_files = sorted(
+                        name for name in zf.namelist()
+                        if name.startswith("word/") and name.endswith(".xml")
+                    )
+                    text_nodes = []
+                    for xml_name in xml_files:
+                        try:
+                            xml_data = zf.read(xml_name)
+                            root = ET.fromstring(xml_data)
+                            for node in root.iter():
+                                # Collect all tags ending with 't' (text runs), plus instrText.
+                                tag = node.tag
+                                if not isinstance(tag, str):
+                                    continue
+                                if tag.endswith("}t") or tag.endswith("}instrText"):
+                                    if node.text and node.text.strip():
+                                        text_nodes.append(node.text.strip())
+                        except Exception as xml_part_error:
+                            print(f"DOCX XML part parse failed ({xml_name}): {xml_part_error}")
+                            continue
+                extracted = "\n".join(text_nodes).strip()
+                if extracted:
+                    return extracted
+                return ""
+            except Exception as fallback_error:
+                print(f"DOCX XML fallback failed: {fallback_error}")
+                return ""
         
         elif file_extension == ".txt":
             # Extract text from TXT
@@ -392,6 +482,15 @@ async def upload_document(file: UploadFile = File(...)):
         
         # Create chunks from the extracted text
         chunks = chunk_text(extracted_text) if extracted_text else []
+
+        # Log extraction result for diagnosis but do not hard-block upload.
+        # Documents with no extractable text are stored with processed=False.
+        if not extracted_text or not chunks:
+            print(
+                f"[WARN] No text extracted from {file.filename} "
+                f"(ext={file_extension}, size={len(content)}). "
+                f"Document will be stored as unprocessed."
+            )
         
         document_record = {
             "id": document_id,
@@ -475,6 +574,83 @@ async def api_info():
             "health": "/health"
         }
     }
+
+
+@app.post("/api/v1/debug/extract")
+async def debug_extract(file: UploadFile = File(...)):
+    """Debug endpoint: returns extraction result without saving anything."""
+    content = await file.read()
+    file_extension = os.path.splitext(file.filename)[1].lower()
+    diagnostics = {
+        "filename": file.filename,
+        "extension": file_extension,
+        "size_bytes": len(content),
+        "pypdf2_result": None,
+        "pdfplumber_result": None,
+        "docx_paragraphs": None,
+        "docx_xml_nodes": None,
+        "final_text_preview": None,
+        "chunks_count": 0,
+        "errors": []
+    }
+    if file_extension == ".pdf":
+        try:
+            pdf_reader = PyPDF2.PdfReader(BytesIO(content))
+            pages_text = []
+            for i, page in enumerate(pdf_reader.pages):
+                t = page.extract_text() or ""
+                pages_text.append(t)
+            full = "\n".join(pages_text).strip()
+            diagnostics["pypdf2_result"] = {
+                "pages": len(pdf_reader.pages),
+                "chars": len(full),
+                "preview": full[:300]
+            }
+        except Exception as e:
+            diagnostics["errors"].append(f"PyPDF2: {e}")
+        try:
+            import pdfplumber
+            fallback_pages = []
+            with pdfplumber.open(BytesIO(content)) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text() or ""
+                    fallback_pages.append(t)
+            full = "\n".join(fallback_pages).strip()
+            diagnostics["pdfplumber_result"] = {
+                "pages": len(fallback_pages),
+                "chars": len(full),
+                "preview": full[:300]
+            }
+        except Exception as e:
+            diagnostics["errors"].append(f"pdfplumber: {e}")
+    elif file_extension == ".docx":
+        try:
+            doc = Document(BytesIO(content))
+            paras = [p.text for p in doc.paragraphs]
+            full = "\n".join(paras).strip()
+            diagnostics["docx_paragraphs"] = {"count": len(paras), "chars": len(full), "preview": full[:300]}
+        except Exception as e:
+            diagnostics["errors"].append(f"python-docx: {e}")
+        try:
+            with zipfile.ZipFile(BytesIO(content)) as zf:
+                xml_files = sorted(n for n in zf.namelist() if n.startswith("word/") and n.endswith(".xml"))
+                nodes = []
+                for xml_name in xml_files:
+                    xml_data = zf.read(xml_name)
+                    root = ET.fromstring(xml_data)
+                    for node in root.iter():
+                        tag = node.tag
+                        if isinstance(tag, str) and (tag.endswith("}t") or tag.endswith("}instrText")):
+                            if node.text and node.text.strip():
+                                nodes.append(node.text.strip())
+                full = "\n".join(nodes).strip()
+                diagnostics["docx_xml_nodes"] = {"xml_files": xml_files, "nodes_found": len(nodes), "chars": len(full), "preview": full[:300]}
+        except Exception as e:
+            diagnostics["errors"].append(f"docx-xml: {e}")
+    extracted = extract_text_from_document(content, file_extension)
+    diagnostics["final_text_preview"] = extracted[:300] if extracted else ""
+    diagnostics["chunks_count"] = len(chunk_text(extracted)) if extracted else 0
+    return diagnostics
 
 
 @app.get("/api/config")
