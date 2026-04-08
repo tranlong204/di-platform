@@ -448,29 +448,15 @@
     </div>
 
     <script>
-        let API_BASE = '/api/v1';
+        const API_BASE = '/api/v1';
         let isLoading = false;
 
         // Load initial data
-        document.addEventListener('DOMContentLoaded', async function() {
-            await loadApiConfig();
+        document.addEventListener('DOMContentLoaded', function() {
             loadStats();
             loadDocuments();
             loadChatHistory();
         });
-
-        async function loadApiConfig() {
-            try {
-                const response = await fetch('/api/config?t=' + Date.now());
-                if (!response.ok) return;
-                const config = await response.json();
-                if (config && typeof config.api_base === 'string' && config.api_base.trim()) {
-                    API_BASE = config.api_base.trim().replace(/\/$/, '');
-                }
-            } catch (error) {
-                console.error('Error loading API config:', error);
-            }
-        }
 
         function handleKeyPress(event) {
             if (event.key === 'Enter' && !event.shiftKey) {
