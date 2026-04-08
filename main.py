@@ -52,74 +52,58 @@ def get_db():
 
 def _textract_ocr(content: bytes, filename: str) -> str:
     """
-    Upload PDF to S3 and run async Textract StartDocumentTextDetection.
-    Required for multi-page PDFs — sync DetectDocumentText only supports
-    single-page images (JPEG/PNG/TIFF), not PDFs passed as raw bytes.
-    Returns extracted text or empty string on failure.
-    """
-    import time
-    import boto3
+    Convert PDF pages to JPEG images via poppler (pdf2image), then run
+    Textract DetectDocumentText on each JPEG synchronously.
 
-    s3_bucket = os.getenv("TEXTRACT_S3_BUCKET", "")
-    if not s3_bucket:
-        print("Textract OCR skipped: TEXTRACT_S3_BUCKET not set")
-        return ""
+    This approach bypasses Textract's PDF renderer (which returns only PAGE
+    blocks for vector-outline PDFs) and lets poppler — the same engine used
+    by browsers — produce accurate raster images that Textract can OCR.
+
+    Requires poppler-utils to be installed in the execution environment
+    (available in the Lambda container via the Dockerfile).
+    """
+    import boto3
+    import io
 
     region = os.getenv("AWS_REGION", "us-west-1")
-    s3_key = f"textract-temp/{int(time.time())}-{filename}"
 
-    s3 = boto3.client("s3", region_name=region)
+    try:
+        from pdf2image import convert_from_bytes
+        images = convert_from_bytes(content, dpi=200, fmt="jpeg")
+    except Exception as e:
+        print(f"pdf2image conversion failed: {e}")
+        return ""
+
+    if not images:
+        print("pdf2image returned no images")
+        return ""
+
     textract = boto3.client("textract", region_name=region)
+    all_text = []
 
-    try:
-        s3.put_object(Bucket=s3_bucket, Key=s3_key, Body=content)
-    except Exception as e:
-        print(f"Textract S3 upload failed: {e}")
-        return ""
-
-    try:
-        job = textract.start_document_text_detection(
-            DocumentLocation={"S3Object": {"Bucket": s3_bucket, "Name": s3_key}}
-        )
-        job_id = job["JobId"]
-
-        # Poll until complete (max ~90 s; Lambda timeout is 120 s)
-        deadline = time.time() + 90
-        while time.time() < deadline:
-            result = textract.get_document_text_detection(JobId=job_id)
-            status = result["JobStatus"]
-            if status == "SUCCEEDED":
-                lines = []
-                while True:
-                    lines.extend(
-                        block["Text"]
-                        for block in result.get("Blocks", [])
-                        if block.get("BlockType") == "LINE"
-                    )
-                    next_token = result.get("NextToken")
-                    if not next_token:
-                        break
-                    result = textract.get_document_text_detection(
-                        JobId=job_id, NextToken=next_token
-                    )
-                text = "\n".join(lines).strip()
-                print(f"Textract async extracted {len(text)} chars")
-                return text
-            elif status == "FAILED":
-                print(f"Textract job failed: {result.get('StatusMessage', 'unknown')}")
-                return ""
-            time.sleep(3)
-
-        print("Textract job timed out after 90 s")
-        return ""
-    except Exception as e:
-        print(f"Textract async OCR failed: {e}")
-        return ""
-    finally:
+    for page_num, image in enumerate(images):
         try:
-            s3.delete_object(Bucket=s3_bucket, Key=s3_key)
-        except Exception:
-            pass
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG", quality=95)
+            jpeg_bytes = buf.getvalue()
+
+            response = textract.detect_document_text(Document={"Bytes": jpeg_bytes})
+            lines = [
+                block["Text"]
+                for block in response.get("Blocks", [])
+                if block.get("BlockType") == "LINE"
+            ]
+            if lines:
+                all_text.append("\n".join(lines))
+                print(f"Textract page {page_num + 1}: {len(lines)} lines")
+        except Exception as e:
+            print(f"Textract page {page_num + 1} failed: {e}")
+            continue
+
+    text = "\n\n".join(all_text).strip()
+    if text:
+        print(f"Textract OCR total: {len(text)} chars from {len(images)} pages")
+    return text
 
 
 def extract_text_from_document(content: bytes, file_extension: str) -> str:
@@ -701,51 +685,14 @@ async def debug_extract(file: UploadFile = File(...)):
         except Exception as e:
             diagnostics["errors"].append(f"pypdf: {e}")
 
-        # Test async Textract — expose raw block-type breakdown to diagnose 0-char results
+        # Test pdf2image + sync Textract OCR (poppler renders pages to JPEG)
         try:
-            import time, boto3, collections
-            s3_bucket = os.getenv("TEXTRACT_S3_BUCKET", "")
-            region = os.getenv("AWS_REGION", "us-west-1")
-            if not s3_bucket:
-                diagnostics["textract_result"] = {"error": "TEXTRACT_S3_BUCKET not set"}
-            else:
-                s3_key = f"textract-debug/{int(time.time())}-{diagnostics['filename']}"
-                s3 = boto3.client("s3", region_name=region)
-                textract = boto3.client("textract", region_name=region)
-                s3.put_object(Bucket=s3_bucket, Key=s3_key, Body=content)
-                try:
-                    job = textract.start_document_text_detection(
-                        DocumentLocation={"S3Object": {"Bucket": s3_bucket, "Name": s3_key}}
-                    )
-                    job_id = job["JobId"]
-                    deadline = time.time() + 90
-                    job_status = "UNKNOWN"
-                    all_blocks = []
-                    while time.time() < deadline:
-                        result = textract.get_document_text_detection(JobId=job_id)
-                        job_status = result["JobStatus"]
-                        if job_status in ("SUCCEEDED", "FAILED"):
-                            all_blocks = result.get("Blocks", [])
-                            break
-                        time.sleep(3)
-                    block_counts = collections.Counter(b.get("BlockType") for b in all_blocks)
-                    lines = [b["Text"] for b in all_blocks if b.get("BlockType") == "LINE"]
-                    tx_text = "\n".join(lines).strip()
-                    diagnostics["textract_result"] = {
-                        "job_status": job_status,
-                        "doc_pages": result.get("DocumentMetadata", {}).get("Pages", "?"),
-                        "block_counts": dict(block_counts),
-                        "line_count": len(lines),
-                        "chars": len(tx_text),
-                        "preview": tx_text[:300],
-                        "s3_bucket": s3_bucket,
-                        "status_message": result.get("StatusMessage", ""),
-                    }
-                finally:
-                    try:
-                        s3.delete_object(Bucket=s3_bucket, Key=s3_key)
-                    except Exception:
-                        pass
+            tx_text = _textract_ocr(content, diagnostics["filename"])
+            diagnostics["textract_result"] = {
+                "method": "pdf2image+DetectDocumentText",
+                "chars": len(tx_text),
+                "preview": tx_text[:300],
+            }
         except Exception as e:
             diagnostics["errors"].append(f"textract: {e}")
             diagnostics["textract_result"] = {"error": str(e)}

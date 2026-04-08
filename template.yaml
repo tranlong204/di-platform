@@ -1,10 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Document Intelligence Platform FastAPI on AWS Lambda
+Description: Document Intelligence Platform FastAPI on AWS Lambda (container image)
 
 Globals:
   Function:
-    Runtime: python3.12
     Timeout: 120
     MemorySize: 1024
     Architectures:
@@ -39,9 +38,7 @@ Resources:
   DiPlatformApiFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: di-platform-api
-      CodeUri: .
-      Handler: lambda_handler.handler
+      PackageType: Image
       Environment:
         Variables:
           SUPABASE_URL: !Ref SupabaseUrl
@@ -53,6 +50,7 @@ Resources:
         - Statement:
             - Effect: Allow
               Action:
+                - textract:DetectDocumentText
                 - textract:StartDocumentTextDetection
                 - textract:GetDocumentTextDetection
               Resource: "*"
@@ -73,6 +71,10 @@ Resources:
           Properties:
             Path: /{proxy+}
             Method: ANY
+    Metadata:
+      DockerTag: latest
+      DockerContext: .
+      Dockerfile: Dockerfile
 
 Outputs:
   ApiUrl:
